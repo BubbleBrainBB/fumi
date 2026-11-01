@@ -172,12 +172,15 @@ final class WysiwygEngine {
         let italicFont = NSFontManager.shared.convert(bodyFont, toHaveTrait: .italicFontMask)
         let boldItalicFont = NSFontManager.shared.convert(boldFont, toHaveTrait: .italicFontMask)
 
+        // Headings wrap at 1.3× their size, never tighter than a body line,
+        // so a body-size #### keeps the body's rhythm.
         func heading(size: CGFloat, weight: NSFont.Weight, before: CGFloat, after: CGFloat,
                      color: NSColor = ink) -> [NSAttributedString.Key: Any] {
             [
                 .font: resolveFont(name: fontName, size: size, weight: weight),
                 .foregroundColor: color,
-                .paragraphStyle: paragraph(lineSpacing: 4, before: before, after: after),
+                .paragraphStyle: paragraph(lineHeight: max((size * 1.3).rounded(), bodyLineHeight),
+                                           before: before, after: after),
             ]
         }
 
@@ -535,8 +538,10 @@ final class WysiwygEngine {
                 continue
             }
 
-            // List items (bullets, numbers, to-dos)
-            styleListItem(storage, line: line.text, lineRange: lineRange, isActive: isActive)
+            // List items (bullets, numbers, to-dos); anything else is a paragraph.
+            if !styleListItem(storage, line: line.text, lineRange: lineRange, isActive: isActive) {
+                hideLeadingSpaces(storage, line: line.text, lineRange: lineRange)
+            }
         }
 
         for block in spacedBlocks {
@@ -890,13 +895,9 @@ final class WysiwygEngine {
 
     // MARK: - Block helpers
 
-    /// Callout bodies are a size smaller; keep the same rhythm ratio.
-    private var calloutLineHeight: CGFloat {
-        (style.lineHeight * (style.fontSize - 1) / style.fontSize).rounded()
-    }
-
+    /// Callout bodies are body text: the body's line height.
     private func calloutParagraph() -> NSParagraphStyle {
-        Self.paragraph(indent: Self.calloutTextIndent, tail: -14, lineHeight: calloutLineHeight)
+        Self.paragraph(indent: Self.calloutTextIndent, tail: -14, lineHeight: style.lineHeight)
     }
 
     /// Consecutive `>` lines grouped into blocks. A block whose first line
@@ -968,9 +969,8 @@ final class WysiwygEngine {
         let asCallout = calloutIndent != nil
         let indent = calloutIndent ?? Self.quoteIndent * CGFloat(depth)
         let paragraph = asCallout
-            ? Self.paragraph(indent: indent, tail: -14, lineHeight: calloutLineHeight)
+            ? Self.paragraph(indent: indent, tail: -14, lineHeight: style.lineHeight)
             : Self.paragraph(indent: indent, lineHeight: style.lineHeight)
-        paragraph.minimumLineHeight = bodyLineHeight
         if isActive {
             // Live preview: the raw `> ` shows on the caret's line, hung just
             // before the text so the text itself doesn't move.
@@ -994,10 +994,6 @@ final class WysiwygEngine {
         }
     }
 
-    private var bodyLineHeight: CGFloat {
-        ceil(style.bodyFont.ascender - style.bodyFont.descender + style.bodyFont.leading)
-    }
-
     /// Rendered width of raw syntax shown on the caret's line.
     private func prefixWidth(_ prefix: String) -> CGFloat {
         ceil((prefix as NSString).size(withAttributes: [.font: style.bodyFont]).width)
@@ -1005,9 +1001,19 @@ final class WysiwygEngine {
 
     private static let listPrefix = try! NSRegularExpression(pattern: #"^([ \t]*)([-*+]|\d+[.)])[ \t]+(\[[ xX]\][ \t]*)?"#)
 
-    private func styleListItem(_ storage: NSTextStorage, line: String, lineRange: NSRange, isActive: Bool) {
+    /// Markdown ignores up to three spaces before a paragraph; so does the
+    /// page, on the caret's line too, so the text never shifts.
+    private func hideLeadingSpaces(_ storage: NSTextStorage, line: String, lineRange: NSRange) {
+        let spaces = line.prefix(while: { $0 == " " }).count
+        guard (1...3).contains(spaces) else { return }
+        collapse(storage, NSRange(location: lineRange.location, length: spaces))
+    }
+
+    /// Styles the line as a list item; false when it isn't one.
+    @discardableResult
+    private func styleListItem(_ storage: NSTextStorage, line: String, lineRange: NSRange, isActive: Bool) -> Bool {
         let nsLine = line as NSString
-        guard let match = Self.listPrefix.firstMatch(in: line, range: NSRange(location: 0, length: nsLine.length)) else { return }
+        guard let match = Self.listPrefix.firstMatch(in: line, range: NSRange(location: 0, length: nsLine.length)) else { return false }
 
         let leading = nsLine.substring(with: match.range(at: 1))
         let columns = leading.reduce(0) { $0 + ($1 == "\t" ? 4 : 1) }
@@ -1026,9 +1032,9 @@ final class WysiwygEngine {
             kind = .bullet(level: level)
         }
 
-        let paragraph = Self.paragraph(indent: indent, lineHeight: style.lineHeight, after: 2)
-        // An empty item is all collapsed syntax; keep it one body line tall.
-        paragraph.minimumLineHeight = bodyLineHeight
+        // Items keep the body's line height (an empty item, all collapsed
+        // syntax, stays one line tall too), a little air between them.
+        let paragraph = Self.paragraph(indent: indent, lineHeight: style.lineHeight, after: 4)
         let prefix = NSRange(location: lineRange.location, length: match.range.length)
         if isActive {
             // Live preview: on the caret's line the raw `- ` / `1. ` / `- [ ] `
@@ -1053,6 +1059,7 @@ final class WysiwygEngine {
             let text = NSRange(location: NSMaxRange(prefix), length: NSMaxRange(lineRange) - NSMaxRange(prefix))
             storage.addAttributes(style.strikethrough, range: text)
         }
+        return true
     }
 
     /// 1 → "a", 26 → "z", 27 → "aa".
