@@ -2,18 +2,26 @@ import AppKit
 import SwiftUI
 import WebKit
 
-/// The WeChat Article extension (design boards ㊹–㊻ B): beside the page, a
-/// second sheet showing the open note laid out for the WeChat Official
-/// Account editor at phone width, redrawn as you type, with the theme and
-/// Copy on top. Shown by AppShellView while the tab's preview is open.
+/// The WeChat Article extension (design boards ㊹–㊻ B, 62 A): beside the
+/// page, the open note laid out for the WeChat Official Account editor at
+/// phone width, redrawn as you type. One bar on top: the theme and Copy.
+/// The article sits on the sheet itself, its title at the head.
 struct WeChatPreviewPane: View {
     @Environment(AppModel.self) private var appModel
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage(AppSettings.wechatThemeKey) private var themeName = WeChatRenderer.Theme.blackRed.rawValue
     @State private var article: WeChatRenderer.Article?
     @State private var failure: String?
     @State private var copied = false
+    /// The notices the reader hid; new ones show again.
+    @State private var hiddenNotices: [String]?
 
     private var theme: WeChatRenderer.Theme { WeChatRenderer.Theme(rawValue: themeName) ?? .blackRed }
+
+    private var notices: [String] {
+        if let failure { return [failure] }
+        return article?.warnings.map(WeChatCopy.english) ?? []
+    }
 
     private struct Request: Equatable {
         let note: AppModel.NoteText?
@@ -21,60 +29,49 @@ struct WeChatPreviewPane: View {
     }
 
     var body: some View {
+        let notices = notices
+        let isHidden = !notices.isEmpty && hiddenNotices == notices
         VStack(spacing: 0) {
-            header
-            if let article, !article.title.isEmpty {
-                titleRow(article.title)
+            PublishToolbar {
+                if isHidden { NoticeDot { hiddenNotices = nil } }
+                PopUpButton(help: "Theme", menu: themeMenu) {
+                    Circle().fill(Color(nsColor: theme.accent)).frame(width: 8, height: 8)
+                    Text(theme.name)
+                }
+                Button(action: copy) {
+                    HStack(spacing: 5) {
+                        if copied { Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)) }
+                        Text(copied ? "Copied" : "Copy")
+                    }
+                }
+                .buttonStyle(PaneButtonStyle())
+                .disabled(article == nil || failure != nil)
+                .help("Copy for WeChat (⌥⌘C)")
             }
-            if let notice = failure ?? article?.warnings.first.map(WeChatCopy.english) {
-                Text(notice)
-                    .font(.notely(.caption))
-                    .foregroundColor(Color(nsColor: .adaptive(light: 0x7A5A12, dark: 0xE2C47A)))
-                    .lineSpacing(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 9)
-                    .background(Color(nsColor: .adaptive(light: 0xFBF6EA, dark: 0x3A3220)))
-                    .help(failure ?? article?.warnings.map(WeChatCopy.english).joined(separator: "\n") ?? "")
+            if !notices.isEmpty && !isHidden {
+                if failure != nil {
+                    PaneNotice(header: "This note can’t be laid out", items: notices)
+                } else {
+                    PaneNotice(header: PaneNotice<EmptyView>.header(notices.count, before: "pasting"), items: notices) {
+                        hiddenNotices = notices
+                    }
+                }
             }
-            ArticleWebView(html: article?.html ?? "")
+            ArticleWebView(html: article?.html ?? "", title: article?.title ?? "", isDark: colorScheme == .dark)
                 .opacity(failure == nil ? 1 : 0.35)
         }
         .task(id: Request(note: appModel.previewNote, theme: theme)) { await render() }
     }
 
-    private var header: some View {
-        HStack(spacing: 14) {
-            ForEach(WeChatRenderer.Theme.allCases) { option in
-                ThemeWord(title: option.name, isSelected: option == theme) { themeName = option.rawValue }
-            }
-            Spacer(minLength: 8)
-            Button(copied ? "Copied" : "Copy", action: copy)
-                .buttonStyle(CopyButtonStyle())
-                .disabled(article == nil || failure != nil)
-                .help("Copy for WeChat (⌥⌘C)")
+    private func themeMenu() -> NSMenu {
+        let menu = NSMenu()
+        for option in WeChatRenderer.Theme.allCases {
+            let item = ClosureMenuItem(option.name) { themeName = option.rawValue }
+            item.image = option.swatch
+            item.state = option == theme ? .on : .off
+            menu.addItem(item)
         }
-        .padding(.horizontal, 14)
-        .frame(height: 42)
-        .overlay(alignment: .bottom) { Rectangle().fill(Color.primaryText.opacity(0.07)).frame(height: 1) }
-    }
-
-    /// WeChat takes the title in its own field: the article leaves it out,
-    /// so it is offered here on its own.
-    private func titleRow(_ title: String) -> some View {
-        HStack(spacing: 10) {
-            Text(title)
-                .font(.notely(.caption))
-                .foregroundColor(.secondaryText)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Spacer(minLength: 8)
-            QuietLink(title: "Copy title") { WeChatCopy.copyText(title) }
-        }
-        .padding(.horizontal, 14)
-        .frame(height: 30)
-        .overlay(alignment: .bottom) { Rectangle().fill(Color.primaryText.opacity(0.07)).frame(height: 1) }
+        return menu
     }
 
     private func render() async {
@@ -191,88 +188,57 @@ enum WeChatCopy {
     ].map { (try! NSRegularExpression(pattern: $0.0), $0.1) }
 }
 
-// MARK: - Parts
-
-/// A theme's name; the chosen one dark and underlined in the accent, as in
-/// Settings.
-struct ThemeWord: View {
-    let title: String
-    let isSelected: Bool
-    let action: () -> Void
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.notely(.caption))
-                .foregroundColor(isSelected ? .primaryText : (isHovering ? .secondaryText : .faintText))
-                .overlay(alignment: .bottom) {
-                    Rectangle().fill(Color.accent).frame(height: 1.5).offset(y: 4).opacity(isSelected ? 1 : 0)
-                }
-                .padding(.vertical, 6)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
-        .animation(.easeOut(duration: 0.15), value: isSelected)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
-}
-
-struct QuietLink: View {
-    let title: String
-    let action: () -> Void
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.notely(.caption))
-                .foregroundColor(isHovering ? .primaryText : .tertiaryText)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
-    }
-}
-
-/// The sheet's one solid button.
-struct CopyButtonStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var isEnabled
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.notely(.caption, weight: .medium))
-            .foregroundColor(.white)
-            .padding(.horizontal, 12)
-            .frame(height: 24)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.accent.opacity(!isEnabled ? 0.35 : configuration.isPressed ? 0.8 : 1))
-            )
-            .contentShape(Rectangle())
-    }
-}
+// MARK: - The article
 
 /// The article at phone width on a web view: what will be pasted, as it
-/// will look. Updates swap the article in place, so the scroll stays put.
+/// will look, under its title. On a light sheet it sits on the sheet; on a
+/// dark one, on a white phone page, as WeChat shows it. Updates swap the
+/// article in place, so the scroll stays put.
 private struct ArticleWebView: NSViewRepresentable {
     let html: String
+    let title: String
+    let isDark: Bool
 
     private static let page = """
     <!doctype html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer">
     <style>
     html,body{margin:0;background:transparent}
-    body{display:flex;justify-content:center;padding:14px 0 48px}
-    #article{width:375px;background:#fff;border-radius:10px;overflow:hidden;
-      box-shadow:0 0 0 1px rgba(0,0,0,.06),0 2px 10px rgba(0,0,0,.04)}
-    </style></head><body><div id="article"></div></body></html>
+    body{padding:22px 0 48px;font-family:-apple-system,BlinkMacSystemFont,sans-serif}
+    body.dark{padding-top:14px}
+    #column{width:375px;margin:0 auto}
+    body.dark #column{background:#fff;border-radius:10px;padding-top:20px;overflow:hidden}
+    #head{position:relative;margin:0 20px;padding-bottom:18px}
+    #head.empty{display:none}
+    #head::before{content:"";position:absolute;inset:-6px -10px 10px -10px;border-radius:8px;
+      background:rgba(0,0,0,.035);opacity:0}
+    #head:hover::before{opacity:1}
+    #title{position:relative;margin:0;font-size:20px;line-height:1.45;font-weight:600;color:#1D1D1F;letter-spacing:.2px}
+    #copy{position:absolute;right:-4px;bottom:-4px;display:none;align-items:center;gap:5px;height:22px;padding:0 8px;
+      border-radius:6px;background:#fff;border:1px solid #D9D9DC;box-shadow:0 1px 3px rgba(0,0,0,.08);
+      font:12px -apple-system,BlinkMacSystemFont,sans-serif;color:#1D1D1F;cursor:default}
+    #head:hover #copy{display:flex}
+    #copy:active{background:#F2F2F4}
+    body:not(.dark) #article>*:first-child{background:transparent!important}
+    #article>*:first-child{padding-top:0!important}
+    </style></head><body><div id="column">
+    <div id="head" class="empty"><h1 id="title"></h1><div id="copy"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5" y="5" width="8.5" height="8.5" rx="1.8"/><path d="M10.5 3.2V3a1.5 1.5 0 0 0-1.5-1.5H3A1.5 1.5 0 0 0 1.5 3v6A1.5 1.5 0 0 0 3 10.5h.2"/></svg><span>Copy title</span></div></div>
+    <div id="article"></div></div>
+    <script>
+    document.getElementById('copy').addEventListener('click', () => {
+      window.webkit.messageHandlers.wechat.postMessage('copyTitle');
+      const label = document.querySelector('#copy span');
+      label.textContent = 'Copied';
+      setTimeout(() => { label.textContent = 'Copy title'; }, 1200);
+    });
+    </script></body></html>
     """
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> WKWebView {
-        let view = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.add(context.coordinator, name: "wechat")
+        let view = WKWebView(frame: .zero, configuration: configuration)
         view.setValue(false, forKey: "drawsBackground")
         view.navigationDelegate = context.coordinator
         context.coordinator.webView = view
@@ -281,27 +247,61 @@ private struct ArticleWebView: NSViewRepresentable {
     }
 
     func updateNSView(_ view: WKWebView, context: Context) {
-        context.coordinator.show(html)
+        context.coordinator.show(Shown(html: html, title: title, isDark: isDark))
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) {
+        view.configuration.userContentController.removeScriptMessageHandler(forName: "wechat")
+    }
+
+    struct Shown: Equatable {
+        let html: String
+        let title: String
+        let isDark: Bool
+    }
+
+    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         weak var webView: WKWebView?
         private var isLoaded = false
-        private var pending: String?
-        private var shown: String?
+        private var pending: Shown?
+        private var shown: Shown?
 
-        func show(_ html: String) {
-            guard html != shown else { return }
-            guard isLoaded, let webView else { pending = html; return }
-            shown = html
-            let literal = (try? JSONSerialization.data(withJSONObject: [html], options: []))
+        func show(_ next: Shown) {
+            guard next != shown else { return }
+            guard isLoaded, let webView else { pending = next; return }
+            let previous = shown
+            shown = next
+            var script = ""
+            if next.html != previous?.html {
+                script += "document.getElementById('article').innerHTML = \(Self.literal(next.html));"
+            }
+            if next.title != previous?.title {
+                script += """
+                document.getElementById('title').textContent = \(Self.literal(next.title));
+                document.getElementById('head').classList.toggle('empty', \(next.title.isEmpty));
+                """
+            }
+            if next.isDark != previous?.isDark {
+                script += "document.body.classList.toggle('dark', \(next.isDark));"
+            }
+            webView.evaluateJavaScript(script)
+        }
+
+        private static func literal(_ text: String) -> String {
+            let array = (try? JSONSerialization.data(withJSONObject: [text], options: []))
                 .flatMap { String(data: $0, encoding: .utf8) } ?? "[\"\"]"
-            webView.evaluateJavaScript("document.getElementById('article').innerHTML = \(literal)[0];")
+            return "\(array)[0]"
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             isLoaded = true
             if let pending { self.pending = nil; show(pending) }
+        }
+
+        /// WeChat takes the title in a field of its own, so it's copied apart.
+        func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard message.body as? String == "copyTitle", let title = shown?.title else { return }
+            WeChatCopy.copyText(title)
         }
 
         /// Links open in the browser, never inside the preview.

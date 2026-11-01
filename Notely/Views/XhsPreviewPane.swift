@@ -3,79 +3,24 @@ import SwiftUI
 import WebKit
 
 /// The publish preview beside the page: the WeChat article or the
-/// Xiaohongshu cards. With both extensions on, a switch on top chooses, and
-/// each note keeps its choice (board ㊾).
+/// Xiaohongshu cards. Each side draws the one bar (board 62 A), where the
+/// platform names switch between them; each note keeps its choice (㊾).
 struct PublishPreviewPane: View {
     @Environment(AppModel.self) private var appModel
-    @AppStorage(AppSettings.wechatExtensionKey) private var wechatEnabled = false
-    @AppStorage(AppSettings.xhsExtensionKey) private var xhsEnabled = false
 
     static let width: CGFloat = 420
 
     var body: some View {
-        let target = appModel.publishTarget(for: appModel.selectedNoteId)
-        VStack(spacing: 0) {
-            if wechatEnabled && xhsEnabled {
-                HStack {
-                    PreviewSwitch(selection: target) { appModel.setPublishTarget($0, for: appModel.selectedNoteId) }
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 12)
-                .frame(height: 40)
-                .overlay(alignment: .bottom) { Rectangle().fill(Color.primaryText.opacity(0.07)).frame(height: 1) }
-            }
-            switch target {
-            case .wechat: WeChatPreviewPane()
-            case .xiaohongshu: XhsPreviewPane()
-            }
+        switch appModel.publishTarget(for: appModel.selectedNoteId) {
+        case .wechat: WeChatPreviewPane()
+        case .xiaohongshu: XhsPreviewPane()
         }
-        .background(Color.quietSurface)
     }
 }
 
-/// WeChat | Xiaohongshu: a faint track with the chosen side as a white
-/// segment, like the choices in Settings.
-private struct PreviewSwitch: View {
-    let selection: AppModel.PublishTarget
-    let choose: (AppModel.PublishTarget) -> Void
-    @Namespace private var segment
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(AppModel.PublishTarget.allCases, id: \.self) { target in
-                let isSelected = target == selection
-                Button {
-                    withAnimation(.easeOut(duration: 0.18)) { choose(target) }
-                } label: {
-                    Text(target == .wechat ? "WeChat" : "Xiaohongshu")
-                        .font(.notely(.caption, weight: isSelected ? .medium : .regular))
-                        .foregroundColor(isSelected ? .primaryText : .secondaryText)
-                        .padding(.horizontal, 11)
-                        .frame(height: 22)
-                        .background {
-                            if isSelected {
-                                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                    .fill(colorScheme == .dark ? Color.white.opacity(0.14) : Color.white)
-                                    .shadow(color: .black.opacity(0.12), radius: 1, y: 0.5)
-                                    .matchedGeometryEffect(id: "segment", in: segment)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(isSelected ? .isSelected : [])
-            }
-        }
-        .padding(2)
-        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.primaryText.opacity(0.07)))
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Publish to")
-    }
-}
-
-/// The Xiaohongshu side of the preview (board ㊾ ①): the template, the
-/// post's title and its length, the cards two by two, the caption, Export.
+/// The Xiaohongshu side of the preview (boards ㊾ ①, 62 A①): the template
+/// and Export in the bar, then the post in the order it's read — the cards
+/// three across, its title, its caption — each editable in place.
 struct XhsPreviewPane: View {
     @Environment(AppModel.self) private var appModel
     @Environment(FileNoteStore.self) private var store
@@ -94,9 +39,12 @@ struct XhsPreviewPane: View {
     @State private var deck: XhsDeck?
     @State private var layoutWarnings: [String] = []
     @State private var cardCount = 0
+    @State private var cardsHeight: CGFloat = 0
     @State private var status: String?
     @State private var isWorking = false
     @State private var exportAnchor: NSView?
+    /// The warnings the reader hid; new ones show again.
+    @State private var hiddenWarnings: [String]?
 
     private var noteId: String? { appModel.previewNote?.noteId }
 
@@ -108,15 +56,20 @@ struct XhsPreviewPane: View {
     var body: some View {
         let _ = settings
         VStack(spacing: 0) {
-            header
-            if let deck { titleRow(deck) }
+            toolbar
             notice
             if let deck {
-                XhsCardsView(input: XhsCards.input(for: deck, choices: choices), onLayout: { count, warnings in
-                    cardCount = count
-                    layoutWarnings = warnings
-                }, menu: cardMenu)
-                captionBox(deck)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        XhsCardsView(input: XhsCards.input(for: deck, choices: choices), onLayout: { count, warnings, height in
+                            cardCount = count
+                            layoutWarnings = warnings
+                            if height > 0 { cardsHeight = height }
+                        }, menu: cardMenu)
+                        .frame(height: max(cardsHeight, 160))
+                        postFields(deck)
+                    }
+                }
             } else {
                 Spacer()
             }
@@ -144,124 +97,108 @@ struct XhsPreviewPane: View {
     private var template: XhsCards.Template { XhsCards.template(for: choices) }
     private var ratio: XhsCards.Ratio { XhsCards.ratio(for: choices) }
 
-    private var header: some View {
-        HStack(spacing: 13) {
-            ForEach(XhsCards.Template.allCases) { option in
-                ThemeWord(title: option.name, isSelected: option == template) {
-                    choices.template = option == XhsCards.template(for: XhsCards.NoteChoices()) ? nil : option.rawValue
-                    rebuild()
-                }
+    private var warnings: [String] { (deck?.warnings ?? []) + layoutWarnings }
+
+    private var toolbar: some View {
+        PublishToolbar {
+            if !warnings.isEmpty && hiddenWarnings == warnings { NoticeDot { hiddenWarnings = nil } }
+            PopUpButton(help: "Template and card size", menu: templateMenu) {
+                TemplateGlyph(template: template)
+                Text("\(template.name) · \(ratio.rawValue)")
             }
-            Spacer(minLength: 6)
-            Button(ratio.rawValue) {
-                let next: XhsCards.Ratio = ratio == .portrait ? .square : .portrait
-                choices.ratio = next == XhsCards.ratio(for: XhsCards.NoteChoices()) ? nil : next.rawValue
-                rebuild()
-            }
-            .buttonStyle(.plain)
-            .font(.notely(.caption))
-            .foregroundColor(.secondaryText)
-            .help("Card size: 3:4 or 1:1")
             Button {
                 showExportMenu()
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: 5) {
                     Text(isWorking ? "Exporting…" : "Export")
-                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold))
+                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
                 }
             }
-            .buttonStyle(CopyButtonStyle())
+            .buttonStyle(PaneButtonStyle())
             .disabled(deck == nil || isWorking)
             .background(AnchorView(view: $exportAnchor))
             .help("Export the cards (⌥⌘C adds them to Photos)")
         }
-        .padding(.horizontal, 14)
-        .frame(height: 42)
-        .overlay(alignment: .bottom) { Rectangle().fill(Color.primaryText.opacity(0.07)).frame(height: 1) }
     }
 
-    private func titleRow(_ deck: XhsDeck) -> some View {
-        let title = XhsCards.title(deck, choices)
-        let count = XhsCards.length(title)
-        return HStack(spacing: 10) {
-            TextField(deck.title, text: Binding(
-                get: { title },
-                set: { choices.title = $0 == deck.title ? nil : $0 }
-            ))
-            .textFieldStyle(.plain)
-            .font(.notely(.caption))
-            .foregroundColor(.secondaryText)
-            .help("The post's title. Changing it here doesn't change the note.")
-            Text("\(count)")
-                .font(.notely(.caption).monospacedDigit())
-                .foregroundColor(.tertiaryText)
-                .help("Characters in the title")
-            QuietLink(title: "Copy title") { XhsCards.copyText(title) }
+    private func templateMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(.sectionHeader(title: "Template"))
+        for option in XhsCards.Template.allCases {
+            let item = ClosureMenuItem(option.name) {
+                choices.template = option == XhsCards.template(for: XhsCards.NoteChoices()) ? nil : option.rawValue
+                rebuild()
+            }
+            item.state = option == template ? .on : .off
+            menu.addItem(item)
         }
-        .padding(.horizontal, 14)
-        .frame(height: 32)
-        .overlay(alignment: .bottom) { Rectangle().fill(Color.primaryText.opacity(0.07)).frame(height: 1) }
+        menu.addItem(.separator())
+        menu.addItem(.sectionHeader(title: "Card Size"))
+        for option in XhsCards.Ratio.allCases {
+            let item = ClosureMenuItem(option == .portrait ? "3:4 Portrait" : "1:1 Square") {
+                choices.ratio = option == XhsCards.ratio(for: XhsCards.NoteChoices()) ? nil : option.rawValue
+                rebuild()
+            }
+            item.state = option == ratio ? .on : .off
+            menu.addItem(item)
+        }
+        return menu
     }
 
     @ViewBuilder
     private var notice: some View {
-        let warnings = (deck?.warnings ?? []) + layoutWarnings
+        let warnings = warnings
+        let shown = hiddenWarnings == warnings ? [] : warnings
         let leftOut = deck?.leftOutCount ?? 0
-        if status != nil || !warnings.isEmpty || leftOut > 0 {
-            VStack(alignment: .leading, spacing: 4) {
-                if let status {
-                    Text(status).foregroundColor(.primaryText)
-                }
-                ForEach(warnings, id: \.self) { Text($0) }
+        if status != nil || !shown.isEmpty || leftOut > 0 {
+            PaneNotice(header: shown.isEmpty ? nil : PaneNotice<EmptyView>.header(shown.count, before: "posting"),
+                       items: shown,
+                       hide: shown.isEmpty ? nil : { hiddenWarnings = warnings }) {
                 if leftOut > 0 {
                     HStack(spacing: 8) {
                         Text(leftOut == 1 ? "1 part left out of the cards." : "\(leftOut) parts left out of the cards.")
+                            .foregroundColor(.secondaryText)
                         QuietLink(title: "Put Back") {
                             choices.leftOut = []
                             rebuild()
                         }
                     }
                 }
+                if let status {
+                    Text(status).foregroundColor(.primaryText)
+                }
             }
-            .font(.notely(.caption))
-            .foregroundColor(Color(nsColor: .adaptive(light: 0x7A5A12, dark: 0xE2C47A)))
-            .lineSpacing(2)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            .background(Color(nsColor: .adaptive(light: 0xFBF6EA, dark: 0x3A3220)))
         }
     }
 
-    private func captionBox(_ deck: XhsDeck) -> some View {
+    /// The post's title and caption under the cards, as Xiaohongshu shows
+    /// them. Changing them here doesn't change the note.
+    private func postFields(_ deck: XhsDeck) -> some View {
+        let title = XhsCards.title(deck, choices)
         let caption = XhsCards.caption(deck, choices)
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Text("Caption").font(.notely(.caption, weight: .semibold)).foregroundColor(.primaryText)
-                Text("\(XhsCards.length(caption))")
-                    .font(.notely(.caption).monospacedDigit())
-                    .foregroundColor(.tertiaryText)
-                    .help("Characters in the caption")
-                Spacer()
-                if choices.caption != nil {
-                    QuietLink(title: "Reset") { choices.caption = nil }
-                }
-                QuietLink(title: "Copy caption") { XhsCards.copyText(caption) }
+        return VStack(alignment: .leading, spacing: 16) {
+            PostField(label: "Title", count: XhsCards.length(title), limit: 20,
+                      reset: choices.title == nil ? nil : { choices.title = nil }) {
+                TextField(deck.title, text: Binding(
+                    get: { title },
+                    set: { choices.title = $0 == deck.title ? nil : $0 }
+                ), axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.notely(.emphasis, weight: .semibold))
+                .foregroundColor(.primaryText)
+                .help("The post's title. Changing it here doesn't change the note.")
             }
-            TextEditor(text: Binding(
-                get: { caption },
-                set: { choices.caption = $0 == deck.caption ? nil : $0 }
-            ))
-            .font(.notely(.caption))
-            .foregroundColor(.secondaryText)
-            .scrollContentBackground(.hidden)
-            .frame(height: 120)
+            PostField(label: "Caption", count: XhsCards.length(caption), limit: 1000,
+                      reset: choices.caption == nil ? nil : { choices.caption = nil }) {
+                GrowingTextEditor(text: Binding(
+                    get: { caption },
+                    set: { choices.caption = $0 == deck.caption ? nil : $0 }
+                ))
+            }
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 10)
-        .padding(.bottom, 10)
-        .overlay(alignment: .top) { Rectangle().fill(Color.primaryText.opacity(0.07)).frame(height: 1) }
+        .padding(.horizontal, 22)
+        .padding(.top, 18)
+        .padding(.bottom, 28)
     }
 
     // MARK: - Export
@@ -278,11 +215,7 @@ struct XhsPreviewPane: View {
         menu.addItem(.separator())
         menu.addItem(ClosureMenuItem("Copy Caption") { copyCaption() })
         menu.addItem(ClosureMenuItem("Copy Title") { copyTitle() })
-        if let anchor = exportAnchor {
-            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: anchor.isFlipped ? anchor.bounds.maxY + 4 : -4), in: anchor)
-        } else {
-            menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
-        }
+        menu.popUp(below: exportAnchor)
     }
 
     private func copyCaption() {
@@ -392,24 +325,85 @@ struct XhsPreviewPane: View {
 
 // MARK: - Parts
 
-/// Hands back the NSView behind a SwiftUI view, to anchor a menu to it.
-private struct AnchorView: NSViewRepresentable {
-    @Binding var view: NSView?
+/// A template's paper in miniature, beside its name in the bar.
+private struct TemplateGlyph: View {
+    let template: XhsCards.Template
 
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async { self.view = view }
-        return view
+    var body: some View {
+        let paper: UInt32 = switch template {
+        case .memo, .post: 0xFFFFFF
+        case .grid: 0xFBFBF8
+        case .postDark: 0x1C1C1E
+        }
+        RoundedRectangle(cornerRadius: 2, style: .continuous)
+            .fill(Color(nsColor: .adaptive(light: paper, dark: paper)))
+            .overlay(alignment: .top) {
+                if template == .memo { Rectangle().fill(Color(nsColor: .adaptive(light: 0xFFE070, dark: 0xFFE070))).frame(height: 3) }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
+            .overlay { RoundedRectangle(cornerRadius: 2, style: .continuous).strokeBorder(Color.black.opacity(0.18), lineWidth: 0.5) }
+            .frame(width: 9, height: 12)
     }
-
-    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
-/// The cards, two by two, on a web view running cards.js. A new input lays
+/// A label and its count over a value: the post's title, its caption.
+private struct PostField<Value: View>: View {
+    let label: String
+    let count: Int
+    let limit: Int
+    var reset: (() -> Void)?
+    @ViewBuilder let value: Value
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(label)
+                Spacer(minLength: 8)
+                if let reset { QuietLink(title: "Reset", action: reset) }
+                Text(count > limit ? "\(count) / \(limit)" : "\(count)")
+                    .monospacedDigit()
+                    .foregroundColor(count > limit ? Color(nsColor: .adaptive(light: 0xC8701A, dark: 0xE89A4A)) : .tertiaryText)
+                    .help(count > limit ? "Xiaohongshu takes \(limit) characters at most" : "Characters")
+            }
+            .font(.notely(.caption))
+            .foregroundColor(.tertiaryText)
+            value
+        }
+    }
+}
+
+/// A text editor as tall as its text, so the pane's own scroll carries it.
+private struct GrowingTextEditor: View {
+    @Binding var text: String
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            // Sizes the editor: TextEditor itself won't grow with its text.
+            Text(text + " ")
+                .font(.notely(.body))
+                .lineSpacing(4)
+                .padding(.horizontal, 5)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .opacity(0)
+                .accessibilityHidden(true)
+            TextEditor(text: $text)
+                .font(.notely(.body))
+                .lineSpacing(4)
+                .foregroundColor(.primaryText)
+                .scrollContentBackground(.hidden)
+                .scrollDisabled(true)
+        }
+        .padding(.horizontal, -5)
+    }
+}
+
+/// The cards, three across, on a web view running cards.js, as tall as
+/// they are: the pane scrolls them with the title and caption under them. A new input lays
 /// them out again; so does a new width.
 private struct XhsCardsView: NSViewRepresentable {
     let input: XhsCards.Input
-    let onLayout: (Int, [String]) -> Void
+    let onLayout: (Int, [String], CGFloat) -> Void
     let menu: (Int, [String]) -> NSMenu
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -450,12 +444,15 @@ private struct XhsCardsView: NSViewRepresentable {
 
         // The cards' own menu replaces the web view's.
         override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) { menu.removeAllItems() }
+
+        // The view is as tall as the cards; the pane around it scrolls.
+        override func scrollWheel(with event: NSEvent) { nextResponder?.scrollWheel(with: event) }
     }
 
     @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         weak var webView: WKWebView?
-        var onLayout: ((Int, [String]) -> Void)?
+        var onLayout: ((Int, [String], CGFloat) -> Void)?
         var menu: ((Int, [String]) -> NSMenu)?
         private var isLoaded = false
         private var shown: XhsCards.Input?
@@ -485,10 +482,11 @@ private struct XhsCardsView: NSViewRepresentable {
                     let result = try await webView.callAsyncJavaScript("return await NotelyXhs.layout(JSON.parse(json))",
                                                                        arguments: ["json": input.json], in: nil, contentWorld: .page)
                     let object = result as? [String: Any] ?? [:]
-                    onLayout?(object["count"] as? Int ?? 0, object["warnings"] as? [String] ?? [])
+                    onLayout?(object["count"] as? Int ?? 0, object["warnings"] as? [String] ?? [],
+                              CGFloat(object["height"] as? Double ?? 0))
                 } catch {
                     let detail = (error as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String ?? error.localizedDescription
-                    onLayout?(0, ["The cards couldn't be laid out: \(detail)"])
+                    onLayout?(0, ["The cards couldn't be laid out: \(detail)"], 0)
                 }
                 isLayingOut = false
                 run()
@@ -510,7 +508,8 @@ private struct XhsCardsView: NSViewRepresentable {
             guard let body = message.body as? [String: Any] else { return }
             // The cards laid out again once their images arrived.
             if body["type"] as? String == "layout" {
-                onLayout?(body["count"] as? Int ?? 0, body["warnings"] as? [String] ?? [])
+                onLayout?(body["count"] as? Int ?? 0, body["warnings"] as? [String] ?? [],
+                          CGFloat(body["height"] as? Double ?? 0))
                 return
             }
             guard body["type"] as? String == "menu", let index = body["index"] as? Int, let webView, let menu else { return }

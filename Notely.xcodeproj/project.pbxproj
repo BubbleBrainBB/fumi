@@ -20,6 +20,7 @@
 		333111173DC8DD349E4C037F /* FrontmatterAttachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFA6F511541193EB58C2C2BB /* FrontmatterAttachment.swift */; };
 		33D9DA3D8962040517AE5746 /* FolderOpenView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC832FB4A06344B92E957336 /* FolderOpenView.swift */; };
 		3D35EC8F5BBB43A3AC053312 /* InlineLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ACD2F5A00559F187AD36321 /* InlineLink.swift */; };
+		3D3656444151899136D6B568 /* PublishParts.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8E962C595F20F7A5845632E /* PublishParts.swift */; };
 		3FC67920DA4669C7A4BF7607 /* LibraryList.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA605F20CF403A104C6D08DA /* LibraryList.swift */; };
 		402621765996F526DB134691 /* WysiwygEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12750DB5F5885CC0AF7C06A2 /* WysiwygEngine.swift */; };
 		43A16CAEAE433C372A8DEF37 /* OutlineRail.swift in Sources */ = {isa = PBXBuildFile; fileRef = B834F6F4A4E86F46D84CE29F /* OutlineRail.swift */; };
@@ -153,6 +154,7 @@
 		ED6F0797BF320978F6417590 /* AppShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppShellView.swift; sourceTree = "<group>"; };
 		EFA6F511541193EB58C2C2BB /* FrontmatterAttachment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrontmatterAttachment.swift; sourceTree = "<group>"; };
 		F213B177D8B8C3BA88B271F2 /* Merge3.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Merge3.swift; sourceTree = "<group>"; };
+		F8E962C595F20F7A5845632E /* PublishParts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublishParts.swift; sourceTree = "<group>"; };
 		F9A16EF59DECE0BFDBD23DD4 /* CodeBlockLayoutManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeBlockLayoutManager.swift; sourceTree = "<group>"; };
 		FC13FB98F064F67AB2187636 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		FC5ED0A570180C8D5FC1828D /* WindowCloseBehavior.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowCloseBehavior.swift; sourceTree = "<group>"; };
@@ -238,6 +240,7 @@
 				FC832FB4A06344B92E957336 /* FolderOpenView.swift */,
 				10560BD4D433AA5E2E0963E9 /* MemosView.swift */,
 				71147678FE2A21B62801107B /* MemoText.swift */,
+				F8E962C595F20F7A5845632E /* PublishParts.swift */,
 				03532A01AA2EB932F86A5870 /* WeChatPreviewPane.swift */,
 				5F7053A14A97A28F32F7553F /* XhsPreviewPane.swift */,
 				30E11D5D6BD4E37800B83CC5 /* Editor */,
@@ -457,6 +460,7 @@
 				6C33E266DBC8945596F799B7 /* OutlineSectionPreview.swift in Sources */,
 				A06CF58A5074A823598CE2BE /* PDFExporter.swift in Sources */,
 				B4AF80B0DC1911A285A8163C /* PageEdgeBlur.swift in Sources */,
+				3D3656444151899136D6B568 /* PublishParts.swift in Sources */,
 				EDC3F2C3790B9433DE567946 /* QuickCapture.swift in Sources */,
 				69B1F3996A0665B60E0F6C7B /* QuietScroller.swift in Sources */,
 				4699BE42784CA2058A721896 /* SearchPopover.swift in Sources */,

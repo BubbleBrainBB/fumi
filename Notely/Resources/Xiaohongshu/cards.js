@@ -554,8 +554,8 @@
     if (exporting) {
       holder.innerHTML = html.join('');
     } else {
-      const columns = 2;
-      const width = Math.max(120, Math.floor((document.body.clientWidth - 28 - 12 * (columns - 1)) / columns));
+      const columns = 3;
+      const width = Math.max(90, Math.floor((document.body.clientWidth - 44 - 8 * (columns - 1)) / columns));
       const scale = width / CARD_W;
       document.body.style.setProperty('--cell-w', `${width}px`);
       document.body.style.setProperty('--cell-h', `${Math.round(cardH * scale)}px`);
@@ -576,8 +576,9 @@
         const rect = card.getBoundingClientRect();
         return { x: rect.left + window.scrollX, y: rect.top + window.scrollY, width: rect.width, height: rect.height };
       });
-      result.height = holder.getBoundingClientRect().height;
     }
+    // The preview's web view is made this tall; the pane scrolls it.
+    result.height = holder.getBoundingClientRect().height;
     return result;
   }
 
