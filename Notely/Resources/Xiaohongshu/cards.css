@@ -5,12 +5,12 @@
 html, body { margin: 0; background: transparent; }
 body { -webkit-font-smoothing: antialiased; -webkit-user-select: none; user-select: none; }
 
-/* The preview: two columns of cards, scaled down to fit the sheet. */
+/* The preview: three columns of cards, scaled down to fit the sheet. */
 body.preview #deck {
-  display: grid; grid-template-columns: repeat(2, var(--cell-w)); gap: 12px;
-  justify-content: center; align-content: start; padding: 14px 0 28px;
+  display: grid; grid-template-columns: repeat(3, var(--cell-w)); gap: 8px;
+  justify-content: center; align-content: start; padding: 16px 0 0;
 }
-body.preview .cell { width: var(--cell-w); height: var(--cell-h); position: relative; border-radius: 4px;
+body.preview .cell { width: var(--cell-w); height: var(--cell-h); position: relative; border-radius: 6px;
   box-shadow: 0 0 0 1px rgba(0,0,0,.07), 0 2px 6px rgba(0,0,0,.05); overflow: hidden; cursor: default; }
 body.preview .cell > .card { position: absolute; left: 0; top: 0; transform: scale(var(--scale)); transform-origin: 0 0; }
 body.preview .cell.menu { box-shadow: 0 0 0 2px var(--accent, #1D6FC2), 0 2px 6px rgba(0,0,0,.05); }
