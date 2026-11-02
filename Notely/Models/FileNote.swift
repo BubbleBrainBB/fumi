@@ -14,6 +14,20 @@ struct FileNote: Identifiable, Hashable {
     var filename: String {
         url.deletingPathExtension().lastPathComponent
     }
+
+    /// `scanned`, a fresh read of the library, holding on to the `known` notes
+    /// it found unchanged. Two copies of a text compare slowly, a character
+    /// at a time, and views compare notes on the main thread; one copy with
+    /// itself compares at once.
+    static func keepingUnchanged(_ known: [FileNote], in scanned: [FileNote]) -> [FileNote] {
+        let byID = Dictionary(known.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return scanned.map { note in
+            guard let old = byID[note.id], old.content.utf8.elementsEqual(note.content.utf8) else { return note }
+            var kept = note
+            kept.content = old.content
+            return kept == old ? old : kept
+        }
+    }
 }
 
 /// A non-note file in the library the app can show: an image, a video or a

@@ -88,6 +88,15 @@ final class WikiLinkIndex {
         NotificationCenter.default.post(name: Self.didChange, object: self)
     }
 
+    /// Whether links to `old` show the same once it's `new`: the same note in
+    /// the same place, with the same title. Compares the body only when it
+    /// changed, so an unchanged library costs next to nothing.
+    static func showsSame(_ old: FileNote, _ new: FileNote) -> Bool {
+        guard old.id == new.id, old.url == new.url else { return false }
+        return old.content == new.content
+            || title(of: old.content, fileName: new.filename) == title(of: new.content, fileName: new.filename)
+    }
+
     /// The note `target` names: by library path when it has one, else by
     /// file name — one in `folder` (the linking note's) first, then the
     /// one nearest the library's top, as Obsidian picks.
