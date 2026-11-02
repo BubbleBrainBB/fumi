@@ -13,7 +13,9 @@ settings:
     SWIFT_VERSION: "5.9"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
     PRODUCT_BUNDLE_IDENTIFIER: com.notes.app
-    PRODUCT_NAME: Notely
+    PRODUCT_NAME: Fumi
+    # The code keeps its working name: only what people see is Fumi.
+    PRODUCT_MODULE_NAME: Notely
     INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright (c) 2025 Dylan Deng"
     INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
     CODE_SIGN_IDENTITY: "-"
@@ -40,14 +42,14 @@ targets:
     info:
       path: Notely/Info.plist
       properties:
-        CFBundleDisplayName: Notely
+        CFBundleDisplayName: Fumi
         CFBundleName: $(PRODUCT_NAME)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
         NSSupportsAutomaticTermination: false
         NSSupportsSuddenTermination: false
-        NSPhotoLibraryAddUsageDescription: Notely adds the Xiaohongshu cards you export to Photos, so they reach your phone.
+        NSPhotoLibraryAddUsageDescription: Fumi adds the Xiaohongshu cards you export to Photos, so they reach your phone.
     settings:
       base:
         ENABLE_PREVIEWS: "YES"

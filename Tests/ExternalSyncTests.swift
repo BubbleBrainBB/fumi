@@ -25,6 +25,7 @@ enum ExternalSyncTests {
     static func main() {
         testResolve()
         testHasExternalChange()
+        testVisiblePaths()
 
         if failures == 0 {
             print("OK: all \(checks) checks passed")
@@ -59,6 +60,21 @@ enum ExternalSyncTests {
         // Local edits that happen to match disk are caught by the first rule.
         expect(ExternalSync.resolve(disk: "same", displayed: "same", lastSynced: "old"),
                .ignore, "local edit converged with disk → ignore")
+    }
+
+    // MARK: - visiblePaths(_:in:)
+
+    static func testVisiblePaths() {
+        let lib = "/w/Notes"
+        expect(ExternalSync.visiblePaths(["/w/Notes/.git/index", "/w/Notes/.obsidian/workspace.json", "/w/Notes/.DS_Store",
+                                          "/w/Notes/sub/.hidden/a.md"], in: lib),
+               [], "inside hidden folders, or hidden themselves → dropped")
+        expect(ExternalSync.visiblePaths(["/w/Notes/a.md", "/w/Notes/sub/b.png", "/w/Notes/sub", "/w/Notes"], in: lib),
+               ["/w/Notes/a.md", "/w/Notes/sub/b.png", "/w/Notes/sub", "/w/Notes"], "visible files and folders → kept")
+        expect(ExternalSync.visiblePaths(["/w/.vaults/Notes/a.md"], in: "/w/.vaults/Notes"),
+               ["/w/.vaults/Notes/a.md"], "a hidden folder above the library doesn't count")
+        expect(ExternalSync.visiblePaths(["/private/w/.git/x"], in: "/w"),
+               ["/private/w/.git/x"], "outside the library as we name it (a symlink) → kept, to be safe")
     }
 
     // MARK: - hasExternalChange(eventPaths:ownWrites:read:)

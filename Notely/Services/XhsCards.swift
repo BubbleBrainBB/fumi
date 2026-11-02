@@ -144,7 +144,7 @@ enum XhsCards {
     static func renderFiles(_ input: Input, name: String) async throws -> [URL] {
         let images = try await XhsRenderer.shared.render(input)
         let folder = FileManager.default.temporaryDirectory
-            .appendingPathComponent("Notely Xiaohongshu", isDirectory: true)
+            .appendingPathComponent("Fumi Xiaohongshu", isDirectory: true)
             .appendingPathComponent(safeName(name), isDirectory: true)
         try? FileManager.default.removeItem(at: folder)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -170,7 +170,7 @@ enum XhsCards {
     static func addToPhotos(_ files: [URL]) async throws {
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
         guard status == .authorized || status == .limited else {
-            throw ExportError(message: "Notely can't add to Photos. Allow it in System Settings › Privacy & Security › Photos.")
+            throw ExportError(message: "Fumi can't add to Photos. Allow it in System Settings › Privacy & Security › Photos.")
         }
         let start = Date()
         try await PHPhotoLibrary.shared().performChanges {

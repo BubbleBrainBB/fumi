@@ -5,8 +5,13 @@ import Observation
 @Observable
 final class FileNoteStore {
     var notes: [FileNote] = [] {
-        // Links between notes show their titles (WikiLinkIndex).
-        didSet { WikiLinkIndex.shared.update(notes: notes.map { ($0.id, $0.url, $0.content) }, library: workspaceURL) }
+        // Links between notes show their titles (WikiLinkIndex). Rebuilding
+        // reads every note, too slow for each save while typing: only when
+        // a link would show something else.
+        didSet {
+            guard !notes.elementsEqual(oldValue, by: WikiLinkIndex.showsSame) else { return }
+            WikiLinkIndex.shared.update(notes: notes.map { ($0.id, $0.url, $0.content) }, library: workspaceURL)
+        }
     }
     /// Images, videos and PDFs in the library, shown in the sidebar too.
     var files: [LibraryFile] = []
@@ -68,19 +73,21 @@ final class FileNoteStore {
     func reloadNotes() {
         guard let workspaceURL else { return }
         let pinnedFiles = pinnedFiles
+        let known = notes
         reloadGeneration += 1
         let generation = reloadGeneration
 
         reloadQueue.async { [weak self] in
             let result = Self.scanLibrary(in: workspaceURL, pinnedFiles: pinnedFiles)
+            let scanned = FileNote.keepingUnchanged(known, in: result.notes)
 
             DispatchQueue.main.async {
                 guard let self,
                       self.reloadGeneration == generation,
                       self.workspaceURL == workspaceURL else { return }
-                self.notes = result.notes
+                if self.notes != scanned { self.notes = scanned }
                 if self.files != result.files { self.files = result.files }
-                self.hasLoadedNotes = true
+                if !self.hasLoadedNotes { self.hasLoadedNotes = true }
             }
         }
     }
@@ -196,10 +203,12 @@ final class FileNoteStore {
         }
         // Update in-memory without full reload (avoids cursor jump)
         if let idx = notes.firstIndex(where: { $0.id == note.id }) {
-            notes[idx].content = written
-            notes[idx].title = TitleExtractor.extract(from: written)
-            notes[idx].tags = TagExtractor.frontmatterTags(from: written)
-            notes[idx].updatedAt = Date()
+            var saved = notes[idx]
+            saved.content = written
+            saved.title = TitleExtractor.extract(from: written)
+            saved.tags = TagExtractor.frontmatterTags(from: written)
+            saved.updatedAt = Date()
+            notes[idx] = saved
         }
         return result
     }
@@ -504,7 +513,9 @@ final class FileNoteStore {
     private func handleFileSystemEvents(_ paths: [String]) {
         let now = Date()
         ownWrites = ownWrites.filter { now.timeIntervalSince($0.value.at) < 5 }
-        guard ExternalSync.hasExternalChange(eventPaths: paths, ownWrites: ownWrites.mapValues { $0.content },
+        let paths = workspaceURL.map { ExternalSync.visiblePaths(paths, in: $0.path) } ?? paths
+        guard !paths.isEmpty,
+              ExternalSync.hasExternalChange(eventPaths: paths, ownWrites: ownWrites.mapValues { $0.content },
                                              read: { try? String(contentsOfFile: $0, encoding: .utf8) })
         else { return }
         scheduleReload()

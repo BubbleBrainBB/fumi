@@ -190,7 +190,7 @@ private struct SettingsPage: View {
                 ShortcutsDisclosure()
                     .padding(.vertical, 12)
                     .overlay(alignment: .top) { SettingsHairline() }
-                Text("Notely \(version)")
+                Text("Fumi \(version)")
                     .font(.notely(.caption))
                     .foregroundColor(.faintText)
                     .padding(.top, 4)

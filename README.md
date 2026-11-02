@@ -1,16 +1,23 @@
-# Notely
+# Fumi
+
+Fumi (文, "writing") was called Notely until 0.3.0; the code and repository still use that name.
 
 A calm Markdown notes app for macOS, written in SwiftUI and AppKit. Your notes are plain `.md` files in a folder on your Mac — open the same folder in Obsidian or any editor.
 
-The product name and icon letter are placeholders until the app is named.
+## Install
+
+Download the DMG from [Releases](https://github.com/BubbleBrainBB/notely/releases), open it and drag Fumi to Applications. Builds are for Apple silicon. Fumi doesn't update itself yet, so new versions are downloaded the same way.
 
 ## Features
 
-- **Live preview editing.** Markdown renders as you type; the syntax of the line you're editing is revealed, Obsidian style — headings, lists, quotes, callouts, code, tables, math, images, local videos and YAML frontmatter.
-- **Plain files.** A notes library is just a folder; subfolders show as a tree in the sidebar. Works with an existing Obsidian vault as it is.
+- **Live preview editing.** Markdown renders as you type; the syntax of the line you're editing is revealed, Obsidian style — headings, lists, quotes, callouts, code, tables, math, images, local videos and YAML frontmatter. Type `/` to insert a block.
+- **Plain files.** A notes library is just a folder; subfolders show as a tree in the sidebar. Works with an existing Obsidian vault as it is, including `[[wiki links]]`, and edits made in other apps are merged in.
+- **Libraries and tabs.** Keep several libraries in the sidebar and open several pages in one window as tabs.
+- **Memos.** Quick notes, kept as one Markdown file per day, with a month calendar and tags.
 - **Quick search.** ⇧⌘F searches file names, titles, folders, tags (`#tag`) and note text.
-- **Typography.** Fixed line height, spacing between Chinese and Latin text, and a composite font that pairs a Latin family with Songti or PingFang.
-- **Settings** for accent color, font, size, line spacing and text width, with a live preview.
+- **Publishing.** Preview a note beside the page as a WeChat article or as Xiaohongshu cards, ready to copy or export. Notes also export as PDF.
+- **Typography.** One line height for all body text, spacing between Chinese and Latin text, and a composite font that pairs a Latin family with Songti or PingFang.
+- **Settings** for theme (with dark mode and Liquid Glass on macOS 26), accent color, font, size, line spacing and text width, with a live preview.
 
 ## Requirements
 
@@ -21,10 +28,18 @@ The product name and icon letter are placeholders until the app is named.
 
 ```bash
 xcodebuild -project Notely.xcodeproj -scheme Notely -configuration Debug -derivedDataPath build/dd build
-open build/dd/Build/Products/Debug/Notely.app
+open build/dd/Build/Products/Debug/Fumi.app
 ```
 
 Or open `Notely.xcodeproj` in Xcode and run the Notely scheme.
+
+## Release
+
+```bash
+Tools/release.sh
+```
+
+Builds Release, signs it with Developer ID and the hardened runtime, and writes a signed DMG to `build/release`. Add `--notarize` to send the DMG to Apple and staple the ticket; the top of the script says how to store the credentials.
 
 ## Tests
 
@@ -51,5 +66,9 @@ swiftc Notely/Views/Editor/CursorMapping.swift Tests/CursorMappingTests.swift -o
 │   └── Resources/    # Asset catalog, app icon
 ├── Notely.xcodeproj
 ├── Tests/            # Standalone test runners
-└── Tools/            # make_app_icon.swift — regenerates the app icon
+└── Tools/            # Release script, app icon generator, WeChat renderer build
 ```
+
+## License
+
+[MIT](LICENSE)

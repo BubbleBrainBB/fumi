@@ -36,6 +36,17 @@ enum ExternalSync {
 
     // MARK: - File-system event filtering
 
+    /// The event paths that can touch the library: not the ones inside hidden
+    /// folders like `.git` or `.obsidian`, or hidden files like `.DS_Store`,
+    /// which the library's scan skips anyway.
+    static func visiblePaths(_ eventPaths: [String], in library: String) -> [String] {
+        let root = library.hasSuffix("/") ? library : library + "/"
+        return eventPaths.filter { path in
+            guard path.hasPrefix(root) else { return true }
+            return !path.dropFirst(root.count).split(separator: "/").contains { $0.hasPrefix(".") }
+        }
+    }
+
     /// Whether a batch of file-system event paths represents a change the app did
     /// not make itself. Used to skip the rescan that our own debounced saves would
     /// otherwise trigger on every keystroke window.
