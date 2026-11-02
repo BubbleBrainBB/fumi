@@ -24,7 +24,7 @@
     "videoNote": "margin:0 0 8px;color:#737b83;font-size:13px;line-height:1.7;letter-spacing:0;",
     "videoSource": "margin:0;color:#737b83;font-size:12px;line-height:1.7;overflow-wrap:anywhere;word-break:break-all;text-decoration:none;",
     "figure": "margin:24px 0;",
-    "image": "box-sizing:border-box;width:100%;max-width:100%;height:auto;display:block;",
+    "image": "box-sizing:border-box;width:100%;max-width:100%;height:auto;display:block;border-radius:8px;",
     "caption": "margin:8px 0 0;color:#737b83;font-size:12px;line-height:1.65;letter-spacing:0;text-align:center;",
     "quote": "margin:26px 0;padding:2px 0 2px 18px;border-left:2px solid #2455d6;",
     "quoteParagraph": "margin:8px 0;color:#465166;font-size:15px;line-height:1.9;letter-spacing:0;",
