@@ -4,7 +4,7 @@ import Foundation
 // Xcode test target exists; both are Foundation-only, so this compiles
 // directly with the sources:
 //
-//     swiftc Notely/Services/FrontmatterParser.swift Notely/Services/TitleExtractor.swift Tests/FrontmatterTitleTests.swift -o /tmp/frontmatter-title-tests
+//     swiftc Fumi/Services/FrontmatterParser.swift Fumi/Services/TitleExtractor.swift Tests/FrontmatterTitleTests.swift -o /tmp/frontmatter-title-tests
 //     /tmp/frontmatter-title-tests
 //
 // Exits non-zero if any assertion fails.

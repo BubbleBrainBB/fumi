@@ -5,7 +5,7 @@ import Foundation
 // `node Tools/wechat-renderer/src/scripts/render.mjs` writes, in every
 // theme — and, its one addition, accept bold beside Chinese punctuation.
 //
-//     swiftc Notely/Services/WeChatRenderer.swift Tests/WeChatRendererTests.swift -o /tmp/wechat-tests
+//     swiftc Fumi/Services/WeChatRenderer.swift Tests/WeChatRendererTests.swift -o /tmp/wechat-tests
 //     /tmp/wechat-tests
 //
 // Needs node; without it the comparison is skipped.
@@ -36,7 +36,7 @@ enum WeChatRendererTests {
 
     static func main() throws {
         let repo = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let renderer = try WeChatRenderer(folder: repo.appendingPathComponent("Notely/Resources/WeChat"))
+        let renderer = try WeChatRenderer(folder: repo.appendingPathComponent("Fumi/Resources/WeChat"))
 
         // ── Basics ──
         let article = try renderer.render(markdown: "# Title\n\nHello **world**.\n\n## Part\n\n> quote",

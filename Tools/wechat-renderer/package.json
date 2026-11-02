@@ -1,7 +1,7 @@
 {
-  "name": "notely-wechat-renderer",
+  "name": "fumi-wechat-renderer",
   "private": true,
-  "description": "Notely's WeChat renderer, forked from the wechat-black-red skill: sources in src/, bundled by build.mjs.",
+  "description": "Fumi's WeChat renderer, forked from the wechat-black-red skill: sources in src/, bundled by build.mjs.",
   "type": "module",
   "scripts": {
     "build": "node build.mjs",

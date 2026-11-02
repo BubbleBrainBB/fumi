@@ -2,7 +2,7 @@ import Foundation
 
 // Standalone test runner for MemoFormat / MemoHeatmap (design board ㉛):
 //
-//     swiftc Notely/Services/MemoFormat.swift Tests/MemoFormatTests.swift -o /tmp/memo-tests
+//     swiftc Fumi/Services/MemoFormat.swift Tests/MemoFormatTests.swift -o /tmp/memo-tests
 //     /tmp/memo-tests
 //
 // Exits non-zero if any assertion fails.
@@ -26,7 +26,7 @@ enum MemoFormatTests {
     打开就写。 #idea
 
     ## 14:02
-    搜索正文改成精确匹配之后，结果干净了。 #notely #search
+    搜索正文改成精确匹配之后，结果干净了。 #fumi #search
 
     """
 
@@ -36,7 +36,7 @@ enum MemoFormatTests {
         expect(memos.count, 2, "two memos")
         expect(memos.map(\.time), ["09:31", "14:02"], "times in file order")
         expect(memos[0].text, "早上散步想到：随手记不该有标题，\n打开就写。 #idea", "multi-line body, trimmed")
-        expect(memos[1].tags, ["notely", "search"], "tags")
+        expect(memos[1].tags, ["fumi", "search"], "tags")
         expect(memos[0].id, "2026-10-16#0", "id is day + index")
 
         // A daily note's own text before the first memo is not a memo.

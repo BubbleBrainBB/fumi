@@ -4,7 +4,7 @@ import AppKit
 // this project, and CompositeFont.swift depends only on AppKit, so it
 // compiles directly with its source file:
 //
-//     swiftc Notely/Views/Editor/CompositeFont.swift Tests/CompositeFontTests.swift -o /tmp/composite-font-tests
+//     swiftc Fumi/Views/Editor/CompositeFont.swift Tests/CompositeFontTests.swift -o /tmp/composite-font-tests
 //     /tmp/composite-font-tests
 //
 // Exits non-zero if any assertion fails.

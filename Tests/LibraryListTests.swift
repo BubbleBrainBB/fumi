@@ -3,7 +3,7 @@ import Foundation
 // Standalone test runner for LibraryList (the sidebar's libraries, design
 // board 60 B):
 //
-//   swiftc Notely/Services/LibraryList.swift Tests/LibraryListTests.swift -o /tmp/library-tests && /tmp/library-tests
+//   swiftc Fumi/Services/LibraryList.swift Tests/LibraryListTests.swift -o /tmp/library-tests && /tmp/library-tests
 
 @main
 enum LibraryListTests {
@@ -17,7 +17,7 @@ enum LibraryListTests {
     }
 
     static func main() {
-        let suite = "notely.libraryListTests"
+        let suite = "fumi.libraryListTests"
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
 

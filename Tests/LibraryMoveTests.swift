@@ -3,7 +3,7 @@ import Foundation
 // Standalone test runner for LibraryMove. No Xcode test target exists; it is
 // Foundation-only, so this compiles directly with the source file:
 //
-//     swiftc Notely/Services/LibraryMove.swift Tests/LibraryMoveTests.swift -o /tmp/librarymove-tests
+//     swiftc Fumi/Services/LibraryMove.swift Tests/LibraryMoveTests.swift -o /tmp/librarymove-tests
 //     /tmp/librarymove-tests
 //
 // Exits non-zero if any assertion fails.

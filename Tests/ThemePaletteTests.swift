@@ -2,7 +2,7 @@ import Foundation
 
 // Standalone test runner for the theme palettes. Compile and run:
 //
-//     swiftc Notely/Utils/ThemePalette.swift Tests/ThemePaletteTests.swift -o /tmp/theme-palette-tests
+//     swiftc Fumi/Utils/ThemePalette.swift Tests/ThemePaletteTests.swift -o /tmp/theme-palette-tests
 //     /tmp/theme-palette-tests
 //
 // Checks that every theme, light and dark, keeps its text readable on both

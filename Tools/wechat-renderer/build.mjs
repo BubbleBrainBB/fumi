@@ -1,6 +1,6 @@
-// Bundles Notely's WeChat renderer (src/, forked from the wechat-black-red
+// Bundles Fumi's WeChat renderer (src/, forked from the wechat-black-red
 // skill at black-red theme 1.4.0 and maintained here on its own) into one
-// script Notely runs in JavaScriptCore, and copies its themes and licenses
+// script Fumi runs in JavaScriptCore, and copies its themes and licenses
 // beside it.
 //
 //     cd Tools/wechat-renderer && npm install && node build.mjs
@@ -12,11 +12,11 @@ import esbuild from 'esbuild';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '../..');
 const src = path.join(here, 'src');
-const out = path.join(repo, 'Notely/Resources/WeChat');
+const out = path.join(repo, 'Fumi/Resources/WeChat');
 
 const shims = { fs: 'fs.mjs', path: 'path.mjs', crypto: 'crypto.mjs', url: 'url.mjs', module: 'module.mjs' };
 const nodeShims = {
-  name: 'notely-node-shims',
+  name: 'fumi-node-shims',
   setup(build) {
     build.onResolve({ filter: /^node:/ }, args => {
       const file = shims[args.path.slice(5)];
@@ -32,11 +32,11 @@ const nodeShims = {
 // in place of vendor/parsers.mjs.
 const parsers = path.join(src, 'vendor/parsers.mjs');
 const cjkFriendly = {
-  name: 'notely-cjk-friendly',
+  name: 'fumi-cjk-friendly',
   setup(build) {
     build.onResolve({ filter: /vendor\/parsers\.mjs$/ }, args =>
-      args.namespace === 'notely' ? undefined : { path: 'parsers', namespace: 'notely' });
-    build.onLoad({ filter: /.*/, namespace: 'notely' }, () => ({
+      args.namespace === 'fumi' ? undefined : { path: 'parsers', namespace: 'fumi' });
+    build.onLoad({ filter: /.*/, namespace: 'fumi' }, () => ({
       contents: `import { MarkdownIt as Base, parseYaml } from ${JSON.stringify(parsers)};
 import cjkFriendly from 'markdown-it-cjk-friendly';
 export function MarkdownIt(options) { return new Base(options).use(cjkFriendly); }
@@ -49,7 +49,7 @@ export { parseYaml };`,
 await esbuild.build({
   stdin: {
     contents: `import { renderArticle } from ${JSON.stringify(path.join(src, 'scripts/render.mjs'))};
-globalThis.NotelyWeChat = {
+globalThis.FumiWeChat = {
   render(markdown, options) {
     const { html, title, report } = renderArticle(markdown, options);
     return JSON.stringify({ html, title, warnings: report.warnings, images: report.images.length, videos: report.videos.length });
@@ -77,13 +77,13 @@ for (const file of ['assets/theme.json', 'assets/themes/blueprint.json', 'assets
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.copyFileSync(path.join(src, file), target);
 }
-// Licenses of what Notely adds to the skill's bundle.
+// Licenses of what Fumi adds to the skill's bundle.
 const added = ['markdown-it-cjk-friendly', 'get-east-asian-width'].map(name => {
   const folder = path.join(here, 'node_modules', name);
   const license = fs.readdirSync(folder).find(file => /^licen[cs]e/i.test(file));
   return `${name}\n${'='.repeat(name.length)}\n\n${fs.readFileSync(path.join(folder, license), 'utf8').trim()}\n`;
 });
-fs.writeFileSync(path.join(out, 'vendor/NOTELY_ADDED_LICENSES.txt'), added.join('\n'));
+fs.writeFileSync(path.join(out, 'vendor/FUMI_ADDED_LICENSES.txt'), added.join('\n'));
 const version = JSON.parse(fs.readFileSync(path.join(src, 'assets/theme.json'), 'utf8')).version;
 fs.writeFileSync(path.join(out, 'SOURCE.txt'),
   `Bundled from Tools/wechat-renderer/src (forked from the wechat-black-red skill; black-red theme ${version}).\nRebuild with: cd Tools/wechat-renderer && node build.mjs\n`);

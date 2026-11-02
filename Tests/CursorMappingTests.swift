@@ -4,7 +4,7 @@ import Foundation
 // this project, and CursorMapping has no AppKit dependency, so this compiles
 // directly with the source file:
 //
-//     swiftc Notely/Views/Editor/CursorMapping.swift Tests/CursorMappingTests.swift -o /tmp/cursormap-tests
+//     swiftc Fumi/Views/Editor/CursorMapping.swift Tests/CursorMappingTests.swift -o /tmp/cursormap-tests
 //     /tmp/cursormap-tests
 //
 // Exits non-zero if any assertion fails.

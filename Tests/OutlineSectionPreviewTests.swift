@@ -2,7 +2,7 @@ import Foundation
 
 // Standalone test runner for OutlineSectionPreview. Compile and run:
 //
-//     swiftc Notely/Views/Editor/OutlineSectionPreview.swift Tests/OutlineSectionPreviewTests.swift -o /tmp/outline-preview-tests
+//     swiftc Fumi/Views/Editor/OutlineSectionPreview.swift Tests/OutlineSectionPreviewTests.swift -o /tmp/outline-preview-tests
 //     /tmp/outline-preview-tests
 //
 // Exits non-zero if any assertion fails.

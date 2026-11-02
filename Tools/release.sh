@@ -15,7 +15,7 @@ cd "$(dirname "$0")/.."
 
 IDENTITY="${SIGN_IDENTITY:-Developer ID Application: Chengsheng Deng (2Y5QK5UNBM)}"
 PROFILE="${NOTARY_PROFILE:-fumi}"
-ENTITLEMENTS="Tools/Notely.entitlements"
+ENTITLEMENTS="Tools/Fumi.entitlements"
 DERIVED="build/rel"
 OUT="build/release"
 APP="$DERIVED/Build/Products/Release/Fumi.app"
@@ -34,7 +34,7 @@ if [ "$NOTARIZE" = 1 ] && [ -n "$(git status --porcelain --untracked-files=no)" 
 fi
 
 echo "==> Building"
-xcodebuild -project Notely.xcodeproj -scheme Notely -configuration Release \
+xcodebuild -project Fumi.xcodeproj -scheme Fumi -configuration Release \
   -derivedDataPath "$DERIVED" clean build -quiet
 
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist")

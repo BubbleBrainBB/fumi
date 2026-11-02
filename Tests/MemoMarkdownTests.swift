@@ -2,7 +2,7 @@ import Foundation
 
 // Standalone test runner for MemoMarkdown:
 //
-//     swiftc Notely/Services/MemoFormat.swift Notely/Services/MemoMarkdown.swift Tests/MemoMarkdownTests.swift -o /tmp/memo-markdown-tests
+//     swiftc Fumi/Services/MemoFormat.swift Fumi/Services/MemoMarkdown.swift Tests/MemoMarkdownTests.swift -o /tmp/memo-markdown-tests
 //     /tmp/memo-markdown-tests
 //
 // Exits non-zero if any assertion fails.

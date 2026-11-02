@@ -3,7 +3,7 @@ import Foundation
 // Standalone test runner for WikiLink and WikiLinkIndex (links between
 // notes, design board 58). Foundation-only, so it compiles on its own:
 //
-//   swiftc Notely/Services/WikiLink.swift Notely/Models/FileNote.swift Tests/WikiLinkTests.swift -o /tmp/wikilink-tests && /tmp/wikilink-tests
+//   swiftc Fumi/Services/WikiLink.swift Fumi/Models/FileNote.swift Tests/WikiLinkTests.swift -o /tmp/wikilink-tests && /tmp/wikilink-tests
 
 @main
 enum WikiLinkTests {

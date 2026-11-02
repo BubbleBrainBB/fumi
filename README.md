@@ -1,8 +1,6 @@
 # Fumi
 
-Fumi (文, "writing") was called Notely until 0.3.0; the code and repository still use that name.
-
-A calm Markdown notes app for macOS, written in SwiftUI and AppKit. Your notes are plain `.md` files in a folder on your Mac — open the same folder in Obsidian or any editor.
+Fumi (文, "writing") is a calm Markdown notes app for macOS, written in SwiftUI and AppKit. Your notes are plain `.md` files in a folder on your Mac — open the same folder in Obsidian or any editor.
 
 ## Install
 
@@ -27,11 +25,11 @@ Download the DMG from [Releases](https://github.com/BubbleBrainBB/fumi/releases)
 ## Build and run
 
 ```bash
-xcodebuild -project Notely.xcodeproj -scheme Notely -configuration Debug -derivedDataPath build/dd build
+xcodebuild -project Fumi.xcodeproj -scheme Fumi -configuration Debug -derivedDataPath build/dd build
 open build/dd/Build/Products/Debug/Fumi.app
 ```
 
-Or open `Notely.xcodeproj` in Xcode and run the Notely scheme.
+Or open `Fumi.xcodeproj` in Xcode and run the Fumi scheme.
 
 ## Release
 
@@ -46,14 +44,14 @@ Builds Release, signs it with Developer ID and the hardened runtime, and writes 
 There is no Xcode test target. Each file in `Tests/` is a standalone runner; the `swiftc` command that builds it is in the comment at its top. Run from the repository root, for example:
 
 ```bash
-swiftc Notely/Views/Editor/CursorMapping.swift Tests/CursorMappingTests.swift -o /tmp/cursormap-tests && /tmp/cursormap-tests
+swiftc Fumi/Views/Editor/CursorMapping.swift Tests/CursorMappingTests.swift -o /tmp/cursormap-tests && /tmp/cursormap-tests
 ```
 
 ## Project structure
 
 ```
 .
-├── Notely/
+├── Fumi/
 │   ├── App/          # Window shell, app model, window behavior
 │   ├── Models/       # Notes and settings
 │   ├── Services/     # File store, search, frontmatter, titles, tags
@@ -64,7 +62,7 @@ swiftc Notely/Views/Editor/CursorMapping.swift Tests/CursorMappingTests.swift -o
 │   │   ├── Settings/
 │   │   └── FolderOpenView.swift   # Welcome page (first launch)
 │   └── Resources/    # Asset catalog, app icon
-├── Notely.xcodeproj
+├── Fumi.xcodeproj
 ├── Tests/            # Standalone test runners
 └── Tools/            # Release script, app icon generator, WeChat renderer build
 ```

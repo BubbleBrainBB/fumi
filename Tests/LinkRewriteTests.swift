@@ -3,7 +3,7 @@ import Foundation
 // Standalone test runner for LinkRewrite. No Xcode test target exists; it is
 // Foundation-only, so this compiles directly with the source files:
 //
-//     swiftc Notely/Services/InlineLink.swift Notely/Services/LibraryMove.swift Notely/Services/LinkRewrite.swift Tests/LinkRewriteTests.swift -o /tmp/linkrewrite-tests
+//     swiftc Fumi/Services/InlineLink.swift Fumi/Services/LibraryMove.swift Fumi/Services/LinkRewrite.swift Tests/LinkRewriteTests.swift -o /tmp/linkrewrite-tests
 //     /tmp/linkrewrite-tests
 //
 // Exits non-zero if any assertion fails.

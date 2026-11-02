@@ -3,7 +3,7 @@ import Foundation
 // Standalone test runner for NoteTreeBuilder. No Xcode test target exists;
 // it is Foundation-only, so this compiles directly with the sources:
 //
-//     swiftc Notely/Models/FileNote.swift Notely/Views/Sidebar/NoteTree.swift Tests/NoteTreeTests.swift -o /tmp/notetree-tests
+//     swiftc Fumi/Models/FileNote.swift Fumi/Views/Sidebar/NoteTree.swift Tests/NoteTreeTests.swift -o /tmp/notetree-tests
 //     /tmp/notetree-tests
 //
 // Exits non-zero if any assertion fails.

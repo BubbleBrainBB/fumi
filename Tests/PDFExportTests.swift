@@ -1,26 +1,26 @@
 import AppKit
 import PDFKit
 
-// Standalone integration test for the PDF export (Notely/Services/PDFExporter.swift).
+// Standalone integration test for the PDF export (Fumi/Services/PDFExporter.swift).
 // Compiles the exporter and its dependency graph together with this file:
 //
 //     swiftc -o /tmp/pdf-export-tests \
-//       Notely/Utils/ColorTokens.swift \
-//       Notely/Utils/ThemePalette.swift \
-//       Notely/Models/AppSettings.swift \
-//       Notely/Models/FileNote.swift \
-//       Notely/Views/Editor/CompositeFont.swift \
-//       Notely/Views/Editor/WysiwygEngine.swift \
-//       Notely/Views/Editor/CodeBlockLayoutManager.swift \
-//       Notely/Views/Editor/Callout.swift \
-//       Notely/Views/Editor/ImageAttachment.swift \
-//       Notely/Views/Editor/VideoAttachment.swift \
-//       Notely/Views/Editor/FrontmatterAttachment.swift \
-//       Notely/Views/Editor/MarkdownTable.swift \
-//       Notely/Views/Editor/LatexMath.swift \
-//       Notely/Services/FrontmatterParser.swift \
-//       Notely/Services/InlineLink.swift \
-//       Notely/Services/PDFExporter.swift \
+//       Fumi/Utils/ColorTokens.swift \
+//       Fumi/Utils/ThemePalette.swift \
+//       Fumi/Models/AppSettings.swift \
+//       Fumi/Models/FileNote.swift \
+//       Fumi/Views/Editor/CompositeFont.swift \
+//       Fumi/Views/Editor/WysiwygEngine.swift \
+//       Fumi/Views/Editor/CodeBlockLayoutManager.swift \
+//       Fumi/Views/Editor/Callout.swift \
+//       Fumi/Views/Editor/ImageAttachment.swift \
+//       Fumi/Views/Editor/VideoAttachment.swift \
+//       Fumi/Views/Editor/FrontmatterAttachment.swift \
+//       Fumi/Views/Editor/MarkdownTable.swift \
+//       Fumi/Views/Editor/LatexMath.swift \
+//       Fumi/Services/FrontmatterParser.swift \
+//       Fumi/Services/InlineLink.swift \
+//       Fumi/Services/PDFExporter.swift \
 //       Tests/PDFExportTests.swift
 //     /tmp/pdf-export-tests
 //
@@ -37,8 +37,8 @@ import PDFKit
 // Declared in WysiwygTextView.swift, which this harness leaves out; the image
 // attachments post them.
 extension Notification.Name {
-    static let imageDidLoad = Notification.Name("notely.imageDidLoad")
-    static let animatedImageFrameDidChange = Notification.Name("notely.animatedImageFrameDidChange")
+    static let imageDidLoad = Notification.Name("fumi.imageDidLoad")
+    static let animatedImageFrameDidChange = Notification.Name("fumi.animatedImageFrameDidChange")
 }
 
 @main

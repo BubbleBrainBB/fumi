@@ -4,7 +4,7 @@ import Foundation
 // NoteCardSummary has no SwiftUI dependency, so this compiles directly with the
 // source file:
 //
-//     swiftc Notely/Views/NoteList/NoteCardSummary.swift Tests/NoteCardSummaryTests.swift -o /tmp/summary-tests
+//     swiftc Fumi/Views/NoteList/NoteCardSummary.swift Tests/NoteCardSummaryTests.swift -o /tmp/summary-tests
 //     /tmp/summary-tests
 //
 // Exits non-zero if any assertion fails.

@@ -3,7 +3,7 @@ import Foundation
 // Standalone test runner for InlineLink. No Xcode test target exists; it is
 // Foundation-only, so this compiles directly with the source file:
 //
-//     swiftc Notely/Services/InlineLink.swift Tests/InlineLinkTests.swift -o /tmp/inlinelink-tests
+//     swiftc Fumi/Services/InlineLink.swift Tests/InlineLinkTests.swift -o /tmp/inlinelink-tests
 //     /tmp/inlinelink-tests
 //
 // Exits non-zero if any assertion fails.

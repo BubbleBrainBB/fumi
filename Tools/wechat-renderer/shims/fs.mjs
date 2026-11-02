@@ -1,7 +1,7 @@
-// node:fs for the WeChat renderer inside Notely: reads go to the app
-// (globalThis.__notelyHost); the skill's own files come from the bundle.
+// node:fs for the WeChat renderer inside Fumi: reads go to the app
+// (globalThis.__fumiHost); the skill's own files come from the bundle.
 const SKILL = '/__skill/';
-const host = () => globalThis.__notelyHost;
+const host = () => globalThis.__fumiHost;
 
 /** Bytes of a file, read lazily: render.mjs only hashes them or takes base64. */
 export class FileBytes {
@@ -34,7 +34,7 @@ export function statSync(p) {
 
 export const realpathSync = p => p;
 export const lstatSync = () => ({ isSymbolicLink: () => false });
-export function mkdirSync() { throw new Error('Notely: the renderer does not write files.'); }
-export function writeFileSync() { throw new Error('Notely: the renderer does not write files.'); }
+export function mkdirSync() { throw new Error('Fumi: the renderer does not write files.'); }
+export function writeFileSync() { throw new Error('Fumi: the renderer does not write files.'); }
 
 export default { readFileSync, existsSync, statSync, realpathSync, lstatSync, mkdirSync, writeFileSync };
