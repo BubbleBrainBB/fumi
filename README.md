@@ -6,7 +6,7 @@ A calm Markdown notes app for macOS, written in SwiftUI and AppKit. Your notes a
 
 ## Install
 
-Download the DMG from [Releases](https://github.com/BubbleBrainBB/notely/releases), open it and drag Fumi to Applications. Builds are for Apple silicon. Fumi doesn't update itself yet, so new versions are downloaded the same way.
+Download the DMG from [Releases](https://github.com/BubbleBrainBB/fumi/releases), open it and drag Fumi to Applications. Builds are for Apple silicon. Fumi doesn't update itself yet, so new versions are downloaded the same way.
 
 ## Features
 
