@@ -4,7 +4,7 @@ import Foundation
 // project, and Merge3 is Foundation-only, so it compiles directly with its
 // source file:
 //
-//     swiftc Notely/Services/Merge3.swift Tests/Merge3Tests.swift -o /tmp/merge3-tests
+//     swiftc Fumi/Services/Merge3.swift Tests/Merge3Tests.swift -o /tmp/merge3-tests
 //     /tmp/merge3-tests
 //
 // Exits non-zero if any assertion fails.

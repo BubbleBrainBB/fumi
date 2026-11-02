@@ -4,7 +4,7 @@ import Foundation
 // exists; FuzzySearch is Foundation-only (it only reads FileNote), so this
 // compiles directly with the sources:
 //
-//     swiftc Notely/Models/FileNote.swift Notely/Services/FuzzySearch.swift Tests/FuzzySearchTests.swift -o /tmp/fuzzysearch-tests
+//     swiftc Fumi/Models/FileNote.swift Fumi/Services/FuzzySearch.swift Tests/FuzzySearchTests.swift -o /tmp/fuzzysearch-tests
 //     /tmp/fuzzysearch-tests
 //
 // Exits non-zero if any assertion fails.

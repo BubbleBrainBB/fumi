@@ -4,17 +4,17 @@ import AppKit
 // where the caret is, and ↩ must always move the text by one full line.
 //
 //     swiftc -o /tmp/blank-line-tests \
-//       Notely/Views/Editor/CompositeFont.swift \
-//       Notely/Views/Editor/WysiwygEngine.swift \
-//       Notely/Views/Editor/CodeBlockLayoutManager.swift \
-//       Notely/Views/Editor/Callout.swift \
-//       Notely/Views/Editor/ImageAttachment.swift \
-//       Notely/Views/Editor/VideoAttachment.swift \
-//       Notely/Views/Editor/FrontmatterAttachment.swift \
-//       Notely/Views/Editor/MarkdownTable.swift \
-//       Notely/Views/Editor/LatexMath.swift \
+//       Fumi/Views/Editor/CompositeFont.swift \
+//       Fumi/Views/Editor/WysiwygEngine.swift \
+//       Fumi/Views/Editor/CodeBlockLayoutManager.swift \
+//       Fumi/Views/Editor/Callout.swift \
+//       Fumi/Views/Editor/ImageAttachment.swift \
+//       Fumi/Views/Editor/VideoAttachment.swift \
+//       Fumi/Views/Editor/FrontmatterAttachment.swift \
+//       Fumi/Views/Editor/MarkdownTable.swift \
+//       Fumi/Views/Editor/LatexMath.swift \
 //       Tests/ColorTokensShim.swift \
-//       Notely/Services/FrontmatterParser.swift \
+//       Fumi/Services/FrontmatterParser.swift \
 //       Tests/BlankLineLayoutTests.swift
 //     /tmp/blank-line-tests
 //

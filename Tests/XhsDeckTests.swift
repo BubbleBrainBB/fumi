@@ -3,7 +3,7 @@ import Foundation
 // Standalone test runner for XhsDeck: how a note becomes the Xiaohongshu
 // card layout's blocks — sentences, image leads, title, caption, warnings.
 //
-//     swiftc Notely/Services/XhsDeck.swift Notely/Services/FrontmatterParser.swift Notely/Services/TagExtractor.swift Tests/XhsDeckTests.swift -o /tmp/xhs-tests
+//     swiftc Fumi/Services/XhsDeck.swift Fumi/Services/FrontmatterParser.swift Fumi/Services/TagExtractor.swift Tests/XhsDeckTests.swift -o /tmp/xhs-tests
 //     /tmp/xhs-tests
 //
 // Exits non-zero if any assertion fails.

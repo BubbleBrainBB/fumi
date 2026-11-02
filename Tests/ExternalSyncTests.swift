@@ -4,7 +4,7 @@ import Foundation
 // project, and ExternalSync has no AppKit dependency, so it compiles directly
 // with its source file:
 //
-//     swiftc Notely/Services/ExternalSync.swift Tests/ExternalSyncTests.swift -o /tmp/externalsync-tests
+//     swiftc Fumi/Services/ExternalSync.swift Tests/ExternalSyncTests.swift -o /tmp/externalsync-tests
 //     /tmp/externalsync-tests
 //
 // Exits non-zero if any assertion fails.

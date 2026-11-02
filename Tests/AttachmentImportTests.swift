@@ -2,7 +2,7 @@ import Foundation
 
 // Standalone test runner for AttachmentImport (pasting / dropping media):
 //
-//     swiftc Notely/Models/FileNote.swift Notely/Views/Editor/AttachmentImport.swift Tests/AttachmentImportTests.swift -o /tmp/attachment-tests
+//     swiftc Fumi/Models/FileNote.swift Fumi/Views/Editor/AttachmentImport.swift Tests/AttachmentImportTests.swift -o /tmp/attachment-tests
 //     /tmp/attachment-tests
 //
 // Exits non-zero if any assertion fails.

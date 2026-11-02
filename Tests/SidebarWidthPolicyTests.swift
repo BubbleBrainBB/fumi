@@ -3,7 +3,7 @@ import Foundation
 // Standalone test runner for SidebarWidthPolicy. No Xcode test
 // target exists; the policy is Foundation-only, so it compiles directly:
 //
-//     swiftc Notely/Views/Sidebar/SidebarWidthPolicy.swift Tests/SidebarWidthPolicyTests.swift -o /tmp/sidebarwidth-tests
+//     swiftc Fumi/Views/Sidebar/SidebarWidthPolicy.swift Tests/SidebarWidthPolicyTests.swift -o /tmp/sidebarwidth-tests
 //     /tmp/sidebarwidth-tests
 //
 // Exits non-zero if any assertion fails.

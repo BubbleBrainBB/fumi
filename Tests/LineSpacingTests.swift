@@ -4,7 +4,7 @@ import Foundation
 // in this project, and LineSpacingPreset (defined in AppSettings.swift) has no
 // AppKit dependency, so it compiles directly with its source file:
 //
-//     swiftc Notely/Models/AppSettings.swift Tests/LineSpacingTests.swift -o /tmp/linespacing-tests
+//     swiftc Fumi/Models/AppSettings.swift Tests/LineSpacingTests.swift -o /tmp/linespacing-tests
 //     /tmp/linespacing-tests
 //
 // Exits non-zero if any assertion fails.

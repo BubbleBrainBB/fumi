@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-// Test-only shim for Notely/Utils/ColorTokens.swift, which cannot compile in
+// Test-only shim for Fumi/Utils/ColorTokens.swift, which cannot compile in
 // this standalone harness (`@Observable final class ThemeManager` needs the
 // Observation macro). Everything the engine dependency graph references is
 // reproduced here verbatim; ThemeManager is dropped and `Color.accent` points
@@ -64,7 +64,7 @@ enum TextSize: CGFloat {
 }
 
 extension Font {
-    static func notely(_ size: TextSize, weight: Font.Weight = .regular, design: Font.Design = .default) -> Font {
+    static func fumi(_ size: TextSize, weight: Font.Weight = .regular, design: Font.Design = .default) -> Font {
         .system(size: size.rawValue, weight: weight, design: design)
     }
 }
@@ -72,6 +72,6 @@ extension Font {
 // Declared in WysiwygTextView.swift, which the standalone harness leaves out;
 // the engine and image attachments post them.
 extension Notification.Name {
-    static let imageDidLoad = Notification.Name("notely.imageDidLoad")
-    static let animatedImageFrameDidChange = Notification.Name("notely.animatedImageFrameDidChange")
+    static let imageDidLoad = Notification.Name("fumi.imageDidLoad")
+    static let animatedImageFrameDidChange = Notification.Name("fumi.animatedImageFrameDidChange")
 }

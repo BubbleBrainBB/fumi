@@ -2,7 +2,7 @@ import Foundation
 
 // Standalone test runner for TabHistory (Back / Forward in a tab):
 //
-//     swiftc Notely/App/NoteTabs.swift Tests/TabHistoryTests.swift -o /tmp/tab-history-tests
+//     swiftc Fumi/App/NoteTabs.swift Tests/TabHistoryTests.swift -o /tmp/tab-history-tests
 //     /tmp/tab-history-tests
 //
 // Exits non-zero if any assertion fails.

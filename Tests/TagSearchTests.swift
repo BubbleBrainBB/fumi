@@ -4,7 +4,7 @@ import Foundation
 // and its TagNode/TagTreeBuilder deps are Foundation-only, so this compiles
 // directly with the sources:
 //
-//     swiftc Notely/Services/TagExtractor.swift Notely/Views/Sidebar/TagSearch.swift Tests/TagSearchTests.swift -o /tmp/tagsearch-tests
+//     swiftc Fumi/Services/TagExtractor.swift Fumi/Views/Sidebar/TagSearch.swift Tests/TagSearchTests.swift -o /tmp/tagsearch-tests
 //     /tmp/tagsearch-tests
 //
 // Exits non-zero if any assertion fails.

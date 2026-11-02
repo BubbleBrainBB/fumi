@@ -1,4 +1,4 @@
-name: Notely
+name: Fumi
 options:
   bundleIdPrefix: com.notes
   deploymentTarget:
@@ -14,8 +14,6 @@ settings:
     MACOSX_DEPLOYMENT_TARGET: "14.0"
     PRODUCT_BUNDLE_IDENTIFIER: com.notes.app
     PRODUCT_NAME: Fumi
-    # The code keeps its working name: only what people see is Fumi.
-    PRODUCT_MODULE_NAME: Notely
     INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright (c) 2025 Dylan Deng"
     INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
     CODE_SIGN_IDENTITY: "-"
@@ -24,23 +22,23 @@ settings:
     ENABLE_HARDENED_RUNTIME: "NO"
 
 targets:
-  Notely:
+  Fumi:
     type: application
     platform: macOS
     deploymentTarget: "14.0"
     sources:
-      - path: Notely
+      - path: Fumi
         excludes:
           - "Resources/**"
-      - path: Notely/Resources/Assets.xcassets
+      - path: Fumi/Resources/Assets.xcassets
       # The WeChat Article extension's renderer and themes (Tools/wechat-renderer).
-      - path: Notely/Resources/WeChat
+      - path: Fumi/Resources/WeChat
         type: folder
       # The Xiaohongshu Cards extension's layout (cards.html/css/js).
-      - path: Notely/Resources/Xiaohongshu
+      - path: Fumi/Resources/Xiaohongshu
         type: folder
     info:
-      path: Notely/Info.plist
+      path: Fumi/Info.plist
       properties:
         CFBundleDisplayName: Fumi
         CFBundleName: $(PRODUCT_NAME)

@@ -4,8 +4,8 @@ import Foundation
 // SlashCommand is Foundation-only apart from FuzzyMatch, so this compiles
 // directly with the sources:
 //
-//   swiftc Notely/Views/Editor/SlashCommand.swift Notely/Services/FuzzySearch.swift \
-//     Notely/Models/FileNote.swift Tests/SlashCommandTests.swift -o /tmp/slash-tests && /tmp/slash-tests
+//   swiftc Fumi/Views/Editor/SlashCommand.swift Fumi/Services/FuzzySearch.swift \
+//     Fumi/Models/FileNote.swift Tests/SlashCommandTests.swift -o /tmp/slash-tests && /tmp/slash-tests
 
 @main
 enum SlashCommandTests {
