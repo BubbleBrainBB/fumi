@@ -62,7 +62,7 @@ final class QuickCapture: NSObject {
     private func save(_ text: String) {
         let path = AppSettings.workspacePath
         guard !path.isEmpty else {
-            model.message = "Open a notebook in Notely first."
+            model.message = "Open a notebook in Fumi first."
             return
         }
         do {
@@ -139,8 +139,8 @@ final class QuickCapture: NSObject {
         let menu = NSMenu()
         menu.addItem(withTitle: "New Memo", action: #selector(newMemo), keyEquivalent: "").target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Open Notely", action: #selector(openApp), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "Quit Notely", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "Open Fumi", action: #selector(openApp), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Quit Fumi", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
         statusItem?.menu = menu
         sender.performClick(nil)
         statusItem?.menu = nil

@@ -83,7 +83,7 @@ enum PDFExporter {
         var mediaBox = CGRect(origin: .zero, size: pageSize)
         let info: [String: Any] = [
             kCGPDFContextTitle as String: configuration.title,
-            kCGPDFContextCreator as String: "Notely",
+            kCGPDFContextCreator as String: "Fumi",
         ]
         guard let context = CGContext(consumer: consumer, mediaBox: &mediaBox,
                                       info as CFDictionary) else { return nil }

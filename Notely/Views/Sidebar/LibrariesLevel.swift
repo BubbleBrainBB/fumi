@@ -189,7 +189,7 @@ private struct LibraryRow: View {
             Button("Cancel", role: .cancel) {}
             Button("Rename") { LibraryList.shared.rename(entry.path, to: text) }
         } message: {
-            Text("Only the name Notely shows changes; the folder keeps its own. Leave it empty to use the folder’s name.")
+            Text("Only the name Fumi shows changes; the folder keeps its own. Leave it empty to use the folder’s name.")
         }
         .alert("Change Icon", isPresented: $isChangingIcon) {
             TextField("A letter or emoji", text: $text)

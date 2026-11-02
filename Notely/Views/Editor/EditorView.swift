@@ -269,7 +269,7 @@ struct EditorView: View {
     /// here; say where the outside version went.
     private func showConflictCopy(_ copy: FileNote) {
         let alert = NSAlert()
-        alert.messageText = "This note was also changed outside Notely"
+        alert.messageText = "This note was also changed outside Fumi"
         alert.informativeText = "Some paragraphs were changed both here and outside. The note keeps your version; "
             + "the outside version was saved as “\(copy.filename)” in the same folder."
         alert.addButton(withTitle: "OK")

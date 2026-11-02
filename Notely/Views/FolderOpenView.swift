@@ -10,7 +10,7 @@ struct FolderOpenView: View {
     @State private var appeared = false
     @State private var errorMessage: String?
 
-    static let productName = "Notely"
+    static let productName = "Fumi"
 
     var body: some View {
         Group {
@@ -99,7 +99,7 @@ struct FolderOpenView: View {
         open(url)
     }
 
-    /// Makes (or reuses) Documents/Notely and opens a first, blank note.
+    /// Makes (or reuses) Documents/Fumi and opens a first, blank note.
     private func startNewNotebook() {
         let fm = FileManager.default
         guard let documents = fm.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
