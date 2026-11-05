@@ -1532,6 +1532,7 @@ dependencies = [
  "fumi-core",
  "fumi-editor",
  "fumi-memos",
+ "fumi-publish",
  "fumi-settings",
  "fumi-sidebar",
  "fumi-toolbar",

@@ -14,6 +14,7 @@ cat > $A/Contents/Info.plist <<P
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleVersion</key><string>0.1</string>
 <key>NSHighResolutionCapable</key><true/>
+<key>NSPhotoLibraryAddUsageDescription</key><string>Fumi adds the Xiaohongshu cards you export to Photos, so they reach your phone.</string>
 </dict></plist>
 P
 codesign --force -s - $A >/dev/null 2>&1

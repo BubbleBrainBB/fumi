@@ -3,6 +3,7 @@
 //! them and connects what they ask of each other.
 
 use crate::pages::PageHost;
+use fumi_publish::PublishPane;
 use fumi_settings::search::SearchPanel;
 use fumi_settings::sheet::{OnChange, SettingsChange, SettingsSheet};
 use fumi_settings::welcome::{OnOpen, WelcomePage};
@@ -31,6 +32,7 @@ pub struct RootView {
     search: Entity<SearchPanel>,
     sheet: Entity<SettingsSheet>,
     welcome: Entity<WelcomePage>,
+    publish: Entity<PublishPane>,
     backdrop: Option<usize>,
     focus: FocusHandle,
     /// 0 is the plain sheet, 1 the framed page.
@@ -66,7 +68,14 @@ impl RootView {
         });
         let welcome = cx.new(|cx| WelcomePage::new(workspace.clone(), on_open, window, cx));
 
+        let text_pages = pages.clone();
+        let publish = cx.new(|cx| {
+            PublishPane::new(workspace.clone(), Rc::new(move |cx: &App| text_pages.read(cx).active_text(cx)), window, cx)
+        });
+        publish.update(cx, |p, cx| p.watch(&pages, window, cx));
+
         let subs = vec![
+            cx.observe(&publish, |_, _, cx| cx.notify()),
             cx.observe(&workspace, |_, _, cx| cx.notify()),
             cx.observe(&pages, |_, _, cx| cx.notify()),
             cx.observe(&sidebar, |_, _, cx| cx.notify()),
@@ -94,6 +103,7 @@ impl RootView {
             search,
             sheet,
             welcome,
+            publish,
             backdrop: None,
             focus,
             frame: 1.,
@@ -107,11 +117,21 @@ impl RootView {
     fn settings_changed(&mut self, change: SettingsChange, window: &mut Window, cx: &mut Context<Self>) {
         match change {
             SettingsChange::Appearance | SettingsChange::Writing => self.apply_theme(window, cx),
-            SettingsChange::Publish => cx.notify(),
+            SettingsChange::Publish => {
+                self.publish.update(cx, |p, cx| p.settings_changed(window, cx));
+                cx.notify();
+            }
         }
     }
 
-    fn toolbar_event(&mut self, _event: &ToolbarEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn toolbar_event(&mut self, event: &ToolbarEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        self.publish.update(cx, |p, cx| match event {
+            ToolbarEvent::CopyForWeChat => p.copy_for_wechat(cx),
+            ToolbarEvent::AddXhsCards => p.add_xhs_cards(cx),
+            ToolbarEvent::ExportPdf(id) => p.export_pdf(id, cx),
+            ToolbarEvent::ExportAllNotes => p.export_all_notes(cx),
+            ToolbarEvent::PreviewToggled => {}
+        });
         cx.notify();
     }
 
@@ -262,7 +282,12 @@ impl Render for RootView {
                     .pt(px(TOOLBAR_HEIGHT))
                     .px(inset)
                     .pb(inset)
-                    .child(self.page_sheet().size_full().child(self.pages.clone())),
+                    .child(fumi_publish::beside_page(
+                        self.page_sheet().size_full().child(self.pages.clone()),
+                        &self.publish,
+                        PAGE_RADIUS,
+                        cx,
+                    )),
             )
             // Painted after the page: the active tab's flare meets its top edge.
             .child(div().absolute().top_0().left_0().right_0().h(px(TOOLBAR_HEIGHT)).child(self.toolbar.clone()));
