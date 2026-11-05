@@ -124,7 +124,7 @@ mod tests {
     #[test]
     fn fixtures_are_byte_exact() {
         for name in ["10k", "50k", "200k", "300k", "500k", "700k", "1m", "visual"] {
-            let path = format!("{}/fixtures/{name}.md", env!("CARGO_MANIFEST_DIR"));
+            let path = format!("{}/../../fixtures/{name}.md", env!("CARGO_MANIFEST_DIR"));
             let bytes = std::fs::read(path).unwrap();
             assert_eq!(Doc::from_bytes(&bytes).unwrap().to_bytes(), bytes);
         }

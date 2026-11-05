@@ -1,11 +1,11 @@
+use fumi_core::{doc, markdown};
+
 mod blocks;
 mod display;
-mod doc;
 #[allow(deprecated, unexpected_cfgs)]
 mod driver;
 mod editor;
 mod element;
-mod markdown;
 mod metrics;
 
 use editor::{Editor, Quit};
