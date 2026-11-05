@@ -150,7 +150,10 @@ fn post_click(x: f64, y: f64) {
         let app: id = msg_send![class!(NSApplication), sharedApplication];
         let window = ns_window();
         let number: isize = msg_send![window, windowNumber];
-        let content: cocoa::foundation::NSRect = msg_send![window, contentLayoutRect];
+        // GPUI measures from the top of the content view, which runs under the
+        // transparent title bar.
+        let view: id = msg_send![window, contentView];
+        let content: cocoa::foundation::NSRect = msg_send![view, frame];
         let at = NSPoint::new(x, content.size.height - y);
         for kind in [NS_LEFT_DOWN, NS_LEFT_UP] {
             let ev: id = msg_send![class!(NSEvent),
@@ -595,9 +598,252 @@ async fn run(scenario: &str, window: WindowHandle<Editor>, cx: &mut AsyncApp) {
             post(&Key { chars: "s".into(), plain: "s".into(), code: 1, flags: FLAG_CMD });
             sleep(cx, 300).await;
         }
+        "clickall" => clickall(window, cx).await,
         "ime" => ime(window, cx).await,
         "tour" => tour(window, cx).await,
         other => println!("unknown scenario {other}"),
+    }
+}
+
+/// Clicks every line and block on every page of a note, the way a person does,
+/// and checks the caret landed on what was under the pointer, near the pointer,
+/// with no selection, and that the page stayed put.
+async fn clickall(window: WindowHandle<Editor>, cx: &mut AsyncApp) {
+    let (mut pass, mut fail, mut jumps) = (0, 0, 0);
+    let count = window.update(cx, |e, _, _| e.items.len()).unwrap();
+    let mut page_top = 0;
+    let mut clicked = std::collections::HashSet::new();
+    while page_top < count {
+        window
+            .update(cx, |e, _, cx| {
+                e.list.scroll_to(ListOffset { item_ix: page_top, offset_in_item: px(0.) });
+                cx.notify();
+            })
+            .unwrap();
+        sleep(cx, 150).await;
+        let targets: Vec<usize> = window
+            .update(cx, |e, _, _| e.painted.borrow().iter().map(|i| i.first_line).collect())
+            .unwrap();
+        println!("PAGE top={page_top} targets={} clicked so far={}", targets.len(), clicked.len());
+        for target in targets {
+            if !clicked.insert(target) {
+                continue;
+            }
+            // Fresh positions: the last click may have opened or closed a block.
+            let spot = window
+                .update(cx, |e, _, _| {
+                    let view = e.list.viewport_bounds();
+                    let p = e.painted.borrow();
+                    let item = p.iter().find(|i| target >= i.first_line && target < i.first_line + i.n_lines)?;
+                    // The window's last pixels are its resize edge, not content.
+                    let top = item.bounds.top().max(view.top());
+                    let bottom = item.bounds.bottom().min(view.bottom() - px(8.));
+                    if bottom - top < px(6.) {
+                        return None;
+                    }
+                    // The first row of text: showing syntax can rewrap later
+                    // rows, which moves characters without moving the caret
+                    // off the one that was clicked.
+                    let row_y = item.text.as_ref().map(|(d, _)| item.bounds.top() + d.top + d.line_height / 2.);
+                    let (x, is_text, hgt) = match &item.text {
+                        Some((d, s)) => {
+                            let empty = d.text.is_empty();
+                            (item.bounds.left() + d.margin + d.indent + if empty { px(0.) } else { px(9.) }, true, item.bounds.size.height)
+                        }
+                        None => (item.bounds.center().x, false, item.bounds.size.height),
+                    };
+                    let top_of = e.list.logical_scroll_top();
+                    let y = row_y.filter(|y| *y > top && *y < bottom).unwrap_or((top + bottom) / 2.);
+                    Some((x, y, is_text, item.first_line, item.n_lines, hgt, top_of))
+                })
+                .unwrap();
+            let Some((x, y, is_text, first, n, hgt, before)) = spot else { continue };
+            post_click(f32::from(x) as f64, f32::from(y) as f64);
+            sleep(cx, 70).await;
+            let (line, empty, after, caret_x) = window
+                .update(cx, |e, _, _| {
+                    let line = e.doc.line_of(e.head);
+                    let caret_x = e.painted.borrow().iter().find(|i| i.first_line == line).and_then(|i| {
+                        let (d, s) = i.text.as_ref()?;
+                        let disp = d.src_to_disp(e.head - e.doc.line_start(line));
+                        let row = s.row_of(disp);
+                        Some(f32::from(i.bounds.left() + d.margin + d.indent + s.x_of(disp, row)))
+                    });
+                    (line, e.selection_is_empty(), e.list.logical_scroll_top(), caret_x)
+                })
+                .unwrap();
+            let on_target = line >= first && line < first + n;
+            let near = !is_text || caret_x.is_none_or(|c| (c - f32::from(x)).abs() <= 22.);
+            let moved = after != before;
+            if moved {
+                jumps += 1;
+            }
+            if on_target && empty && near {
+                pass += 1;
+            } else {
+                fail += 1;
+                // Late or wrong? Look again, and at what was under the pointer.
+                sleep(cx, 400).await;
+                let again = window
+                    .update(cx, |e, _, _| {
+                        let p = e.painted.borrow();
+                        let under: Vec<(usize, usize, f32, f32)> = p
+                            .iter()
+                            .filter(|i| y >= i.bounds.top() - px(30.) && y < i.bounds.bottom() + px(30.))
+                            .map(|i| (i.first_line, i.n_lines, f32::from(i.bounds.top()), f32::from(i.bounds.bottom())))
+                            .collect();
+                        (e.doc.line_of(e.head), under, e.lines[first].kind)
+                    })
+                    .unwrap();
+                println!(
+                    "FAIL click line {first}+{n} at ({:.0},{:.0}) height {:.0}: caret line {line}, empty selection {empty}, caret x {caret_x:?}; 400ms later {again:?}",
+                    f32::from(x), f32::from(y), f32::from(hgt)
+                );
+            }
+            // Wrapped syntax-led lines must not move at all when the caret enters.
+            if let Some((last_y, x0)) = window
+                .update(cx, |e, _, _| {
+                    let p = e.painted.borrow();
+                    let i = p.iter().find(|i| i.first_line == first)?;
+                    let (d, s) = i.text.as_ref()?;
+                    (d.hang > 0 && s.rows.len() > 1).then(|| {
+                        let y = i.bounds.top() + d.top + d.line_height * (s.rows.len() as f32 - 0.5);
+                        (y, i.bounds.left() + d.margin + d.indent + px(9.))
+                    })
+                    // Below the window edge there's nothing to click.
+                    .filter(|(y, _)| *y < e.list.viewport_bounds().bottom() - px(8.))
+                })
+                .unwrap()
+            {
+                post_click(f32::from(x0) as f64, f32::from(last_y) as f64);
+                sleep(cx, 70).await;
+                let caret = window
+                    .update(cx, |e, _, _| {
+                        let line = e.doc.line_of(e.head);
+                        let p = e.painted.borrow();
+                        let i = p.iter().find(|i| i.first_line == line)?;
+                        let (d, s) = i.text.as_ref()?;
+                        let disp = d.src_to_disp(e.head - e.doc.line_start(line));
+                        let row = s.row_of(disp);
+                        Some((line, row + 1 == s.rows.len(), f32::from(i.bounds.left() + d.margin + d.indent + s.x_of(disp, row))))
+                    })
+                    .unwrap();
+                let good = caret.is_some_and(|(l, last, cx_)| l == first && last && (cx_ - f32::from(x0)).abs() <= 22.);
+                if good {
+                    pass += 1;
+                } else {
+                    fail += 1;
+                    println!("FAIL wrapped click line {first}: {caret:?} wanted x {:.0}", f32::from(x0));
+                }
+            }
+            if moved {
+                println!(
+                    "JUMP click line {first}: top {}+{:.0} -> {}+{:.0}",
+                    before.item_ix, f32::from(before.offset_in_item), after.item_ix, f32::from(after.offset_in_item)
+                );
+            }
+        }
+        page_top += window.update(cx, |e, _, _| e.painted.borrow().len().max(1)).unwrap();
+        if clicked.len() > 400 {
+            break;
+        }
+    }
+    println!("RESULT clickall: clicks={} pass={pass} fail={fail} page-jumps={jumps}", pass + fail);
+    // Too few clicks means the pass proved little, so it must not read as clean.
+    let lines_seen = clicked.len();
+    let wanted = count.min(400);
+    println!("CHECK click coverage: {lines_seen} of {wanted} items reached: {}", lines_seen * 10 >= wanted * 9);
+
+    // The case that used to jump: the caret in an open table, then a click on
+    // the formula below it, one frame at a time.
+    let pair = window
+        .update(cx, |e, _, _| {
+            let table = e.lines.iter().position(|l| l.kind == Kind::TableRow)?;
+            let math = e.lines[table..].iter().position(|l| l.kind == Kind::MathOpen)? + table;
+            Some((table, math))
+        })
+        .unwrap();
+    if let Some((table, math)) = pair {
+        window
+            .update(cx, |e, _, cx| {
+                let ix = e.item_of(table);
+                e.list.scroll_to(ListOffset { item_ix: ix.saturating_sub(2), offset_in_item: px(0.) });
+                cx.notify();
+            })
+            .unwrap();
+        sleep(cx, 120).await;
+        place(window, cx, move |e| e.doc.line_start(table));
+        sleep(cx, 250).await;
+        let math_at = window
+            .update(cx, |e, _, _| {
+                let p = e.painted.borrow();
+                let i = p.iter().find(|i| i.first_line == math)?;
+                Some((i.bounds.center(), i.bounds.top(), e.list.logical_scroll_top()))
+            })
+            .unwrap();
+        if let Some((center, top, scroll)) = math_at {
+            post_click(f32::from(center.x) as f64, f32::from(center.y) as f64);
+            let mut trail = Vec::new();
+            let mut last = metrics::frames();
+            let t = Instant::now();
+            while t.elapsed() < Duration::from_millis(250) {
+                sleep(cx, 1).await;
+                if metrics::frames() != last {
+                    last = metrics::frames();
+                    trail.push(
+                        window
+                            .update(cx, |e, _, _| {
+                                let y = e.painted.borrow().iter().find(|i| i.first_line == math).map(|i| f32::from(i.bounds.top()).round());
+                                (y, e.list.logical_scroll_top() == scroll)
+                            })
+                            .unwrap(),
+                    );
+                }
+            }
+            let line = window.update(cx, |e, _, _| e.doc.line_of(e.head)).unwrap();
+            println!(
+                "CHECK table to formula: caret on formula {} , page stayed {}, formula top was {:.0}, per frame {:?}",
+                (math..math + 3).contains(&line),
+                trail.iter().all(|t| t.1),
+                f32::from(top),
+                trail.iter().map(|t| t.0).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    // A click on a to-do's box flips it and leaves the caret alone.
+    let todo = window
+        .update(cx, |e, _, _| (0..e.lines.len()).find(|l| e.doc.line_text(*l).trim_start().starts_with("- [ ] ")))
+        .unwrap();
+    if let Some(line) = todo {
+        place(window, cx, |_| 0);
+        sleep(cx, 150).await;
+        window
+            .update(cx, |e, _, cx| {
+                let ix = e.item_of(line);
+                e.list.scroll_to(ListOffset { item_ix: ix.saturating_sub(1), offset_in_item: px(0.) });
+                cx.notify();
+            })
+            .unwrap();
+        sleep(cx, 150).await;
+        let spot = window
+            .update(cx, |e, _, _| {
+                let p = e.painted.borrow();
+                let i = p.iter().find(|i| i.first_line == line)?;
+                let (d, _) = i.text.as_ref()?;
+                Some((i.bounds.left() + d.margin + d.indent - px(12.), i.bounds.top() + px(14.)))
+            })
+            .unwrap();
+        if let Some((x, y)) = spot {
+            post_click(f32::from(x) as f64, f32::from(y) as f64);
+            sleep(cx, 120).await;
+            let (text, head) = window.update(cx, |e, _, _| (e.doc.line_text(line), e.head)).unwrap();
+            println!("CHECK to-do box flips and caret stays: {} ({text:?}, caret {head})", text.contains("[x]") && head == 0);
+            post(&k_undo());
+            sleep(cx, 120).await;
+            let text = window.update(cx, |e, _, _| e.doc.line_text(line)).unwrap();
+            println!("CHECK undo restores the box: {}", text.contains("[ ]"));
+        }
     }
 }
 

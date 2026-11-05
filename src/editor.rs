@@ -120,6 +120,8 @@ pub struct Editor {
     pub painted: Rc<RefCell<Vec<Painted>>>,
     pub blocks: BlockCache,
     selecting: bool,
+    press_at: Point<Pixels>,
+    dragged: bool,
     caret_on: bool,
     blink_epoch: u64,
     pub text_width: Pixels,
@@ -161,6 +163,8 @@ impl Editor {
             painted: Rc::new(RefCell::new(Vec::new())),
             blocks: BlockCache::default(),
             selecting: false,
+            press_at: Point::default(),
+            dragged: false,
             caret_on: true,
             blink_epoch: 0,
             text_width: px(720.),
@@ -311,22 +315,32 @@ impl Editor {
     /// Recomputes items and tells the list only what differs.
     fn rebuild_items(&mut self) {
         let new = build_items(&self.lines, self.revealed.as_ref());
-        let old = &self.items;
-        let shape = |a: &Item, b: &Item| a.len == b.len && a.kind == b.kind;
-        let mut prefix = 0;
-        while prefix < old.len() && prefix < new.len() && old[prefix] == new[prefix] {
-            prefix += 1;
-        }
-        let mut suffix = 0;
-        while suffix < old.len() - prefix
-            && suffix < new.len() - prefix
-            && shape(&old[old.len() - 1 - suffix], &new[new.len() - 1 - suffix])
-        {
-            suffix += 1;
-        }
-        let (old_end, new_end) = (old.len() - suffix, new.len() - suffix);
-        if prefix != old_end || prefix != new_end {
-            self.list.splice(prefix..old_end, new_end - prefix);
+        let lines_of = |items: &[Item]| items.last().map_or(0, |i| i.start + i.len);
+        if lines_of(&self.items) == lines_of(&new) {
+            // Same text, so only folds changed. Touch just those, or the items
+            // between an old fold and a new one lose their measurements and the
+            // page jumps.
+            for (old_range, count) in fold_changes(&self.items, &new).into_iter().rev() {
+                self.list.splice(old_range, count);
+            }
+        } else {
+            let old = &self.items;
+            let shape = |a: &Item, b: &Item| a.len == b.len && a.kind == b.kind;
+            let mut prefix = 0;
+            while prefix < old.len() && prefix < new.len() && old[prefix] == new[prefix] {
+                prefix += 1;
+            }
+            let mut suffix = 0;
+            while suffix < old.len() - prefix
+                && suffix < new.len() - prefix
+                && shape(&old[old.len() - 1 - suffix], &new[new.len() - 1 - suffix])
+            {
+                suffix += 1;
+            }
+            let (old_end, new_end) = (old.len() - suffix, new.len() - suffix);
+            if prefix != old_end || prefix != new_end {
+                self.list.splice(prefix..old_end, new_end - prefix);
+            }
         }
         self.items = new;
         self.title_line = find_title(&self.lines);
@@ -378,6 +392,16 @@ impl Editor {
     /// measured neighbours and otherwise jumps by item index.
     fn reveal(&mut self, line: usize) {
         self.autoscroll_caret = true;
+        // On screen already: the element itself asks for any small correction
+        // during layout, in the same frame.
+        let visible = self
+            .painted
+            .borrow()
+            .iter()
+            .any(|i| line >= i.first_line && line < i.first_line + i.n_lines);
+        if visible {
+            return;
+        }
         let ix = self.item_of(line);
         let top = self.list.logical_scroll_top().item_ix;
         if ix < top {
@@ -625,6 +649,19 @@ impl Editor {
         self.caret_moved(true);
     }
 
+    /// A click or drag: what's under the pointer is already on screen, and the
+    /// page must not move under it.
+    fn set_head_from_mouse(&mut self, head: usize, extend: bool) {
+        self.head = head;
+        if !extend {
+            self.anchor = head;
+        }
+        self.goal_x = None;
+        self.can_coalesce = false;
+        self.marked = None;
+        self.caret_moved(false);
+    }
+
     fn set_head(&mut self, head: usize, extend: bool, keep_goal: bool) {
         self.head = head;
         if !extend {
@@ -804,8 +841,36 @@ impl Editor {
         }
     }
 
+    /// The to-do whose box is under `p`, if any.
+    fn task_at(&self, p: Point<Pixels>) -> Option<usize> {
+        let painted = self.painted.borrow();
+        let item = painted
+            .iter()
+            .find(|i| p.y >= i.bounds.top() && p.y < i.bounds.bottom())?;
+        let (d, _) = item.text.as_ref()?;
+        let text_x = item.bounds.left() + d.margin + d.indent;
+        (d.task && p.x < text_x && p.x >= text_x - px(26.)).then_some(item.first_line)
+    }
+
+    /// Flips `[ ]` and `[x]` without moving the caret, as Fumi does.
+    fn toggle_task(&mut self, line: usize) {
+        let Kind::List { indent, marker } = self.lines[line].kind else { return };
+        let at = self.doc.line_start(line) + indent as usize + marker as usize + 1;
+        let flipped = if self.doc.slice(at..at + 1) == " " { "x" } else { " " };
+        let sel = (self.anchor, self.head);
+        self.edit(at..at + 1, flipped, false, false);
+        self.anchor = sel.0;
+        self.head = sel.1;
+        self.caret_moved(false);
+    }
+
     fn mouse_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
+        if let Some(line) = self.task_at(e.position) {
+            self.toggle_task(line);
+            cx.notify();
+            return;
+        }
         let at = self.hit_test(e.position);
         let line = self.doc.line_of(at);
         match e.click_count {
@@ -819,15 +884,17 @@ impl Editor {
                     .map(|(i, w)| start + i..start + i + w.len())
                     .unwrap_or(at..at);
                 self.anchor = word.start;
-                self.set_head(word.end, true, false);
+                self.set_head_from_mouse(word.end, true);
             }
             3 => {
                 self.anchor = self.doc.line_start(line);
-                self.set_head(self.doc.line_end(line), true, false);
+                self.set_head_from_mouse(self.doc.line_end(line), true);
             }
             _ => {
                 self.selecting = true;
-                self.set_head(at, e.modifiers.shift, false);
+                self.press_at = e.position;
+                self.dragged = false;
+                self.set_head_from_mouse(at, e.modifiers.shift);
             }
         }
         cx.notify();
@@ -835,9 +902,16 @@ impl Editor {
 
     fn mouse_move(&mut self, e: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
         if self.selecting && e.pressed_button == Some(MouseButton::Left) {
+            // A click can open a block and move text under a still pointer; a
+            // little hand tremor mustn't turn that into a selection.
+            let moved = e.position - self.press_at;
+            if !self.dragged && f32::from(moved.x).abs() < 4. && f32::from(moved.y).abs() < 4. {
+                return;
+            }
+            self.dragged = true;
             let at = self.hit_test(e.position);
             if at != self.head {
-                self.set_head(at, true, false);
+                self.set_head_from_mouse(at, true);
                 cx.notify();
             }
         }
@@ -899,7 +973,12 @@ impl Editor {
                     let b = sel.end.min(start + src_len) - start;
                     (display.src_to_disp(a)..display.src_to_disp(b), sel.end > start + src_len)
                 });
-            return LineEl {
+            let image_below = (reveal && self.lines[line].kind == Kind::Image).then(|| {
+                let src = self.doc.line_text(line);
+                let img = blocks::image(&src, &self.dir, self.text_width, &mut self.blocks);
+                div().w_full().px(self.margin).child(img)
+            });
+            let element = LineEl {
                 line,
                 display,
                 caret,
@@ -908,8 +987,13 @@ impl Editor {
                 selection,
                 painted: self.painted.clone(),
                 shaped: Rc::new(RefCell::new(None)),
-            }
-            .into_any_element();
+            };
+            // An image stays on the page under its source, as in Fumi, so
+            // clicking one doesn't pull everything below it upward.
+            return match image_below {
+                Some(image) => div().w_full().child(element).child(image).into_any_element(),
+                None => element.into_any_element(),
+            };
         }
 
         let range = line..line + item.len as usize;
@@ -920,34 +1004,16 @@ impl Editor {
             ItemKind::Image => blocks::image(&src, &self.dir, self.text_width, &mut self.blocks),
             ItemKind::Line => unreachable!(),
         };
-        let painted = self.painted.clone();
         let sel = self.selection();
         let start = self.doc.line_start(range.start);
-        let selected = !sel.is_empty() && sel.start <= start && sel.end >= start + src.len();
-        div()
-            .relative()
-            .w_full()
-            .px(self.margin)
-            .child(body)
-            .when(selected, |d| {
-                d.child(div().absolute().inset_0().bg(selection()))
-            })
-            .child(
-                canvas(
-                    move |bounds, _, _| {
-                        painted.borrow_mut().push(Painted {
-                            first_line: range.start,
-                            n_lines: range.len(),
-                            bounds,
-                            text: None,
-                        });
-                    },
-                    |_, _, _, _| {},
-                )
-                .absolute()
-                .size_full(),
-            )
-            .into_any_element()
+        BlockEl {
+            child: div().w_full().px(self.margin).child(body).into_any_element(),
+            first_line: range.start,
+            n_lines: range.len(),
+            selected: !sel.is_empty() && sel.start <= start && sel.end >= start + src.len(),
+            painted: self.painted.clone(),
+        }
+        .into_any_element()
     }
 
     fn status_text(&self) -> String {
@@ -1227,6 +1293,38 @@ pub fn find_title(lines: &[LineInfo]) -> Option<usize> {
     None
 }
 
+/// Where two item lists over the same lines differ: old index ranges and how
+/// many items replace each, in order.
+pub fn fold_changes(old: &[Item], new: &[Item]) -> Vec<(Range<usize>, usize)> {
+    let mut out = Vec::new();
+    let (mut i, mut j) = (0, 0);
+    while i < old.len() && j < new.len() {
+        if old[i] == new[j] {
+            i += 1;
+            j += 1;
+            continue;
+        }
+        let (i0, j0) = (i, j);
+        loop {
+            let (a, b) = (old[i].start, new[j].start);
+            if a <= b {
+                i += 1;
+            }
+            if b <= a {
+                j += 1;
+            }
+            if i >= old.len() || j >= new.len() || old[i].start == new[j].start {
+                break;
+            }
+        }
+        out.push((i0..i, j - j0));
+    }
+    if i < old.len() || j < new.len() {
+        out.push((i..old.len(), new.len() - j));
+    }
+    out
+}
+
 pub fn build_items(lines: &[LineInfo], revealed: Option<&Range<usize>>) -> Vec<Item> {
     let mut items = Vec::with_capacity(lines.len());
     let mut i = 0;
@@ -1292,6 +1390,29 @@ mod tests {
         let folded = build_items(&lines, None).len();
         let open = build_items(&lines, Some(&(6..9))).len();
         assert_eq!(open, folded + 2);
+    }
+
+    #[core::prelude::v1::test]
+    fn moving_between_folds_touches_only_those_folds() {
+        let lines = scan_all(DOC);
+        let in_table = build_items(&lines, Some(&(6..9)));
+        let in_math = build_items(&lines, Some(&(12..15)));
+        let changes = fold_changes(&in_table, &in_math);
+        assert_eq!(changes.len(), 2, "{changes:?}");
+        // Applying them in reverse gives the new list's length and leaves the
+        // items between the two folds alone.
+        let mut len = in_table.len();
+        for (range, count) in changes.iter().rev() {
+            len = len - range.len() + count;
+        }
+        assert_eq!(len, in_math.len());
+        assert_eq!(changes[0], (item_ix(&in_table, 6)..item_ix(&in_table, 6) + 3, 1));
+        assert_eq!(changes[1].1, 3);
+        assert_eq!(changes[1].0.len(), 1);
+    }
+
+    fn item_ix(items: &[Item], line: u32) -> usize {
+        items.iter().position(|i| i.start == line).unwrap()
     }
 
     #[core::prelude::v1::test]

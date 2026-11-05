@@ -12,13 +12,21 @@ use std::rc::Rc;
 pub struct Row {
     pub start: usize,
     pub end: usize,
+    /// Where the row starts in the body's unwrapped layout.
     pub x0: Pixels,
 }
 
+/// A line's layout. Display offsets below `hang` belong to the syntax hung left
+/// of the text column (`- [ ] `, `## `); the rest is the body, wrapped exactly as
+/// when that syntax is hidden, so a line doesn't move when the caret enters it.
 pub struct Shaped {
     pub line: WrappedLine,
     pub rows: Vec<Row>,
     pub baseline_shift: Pixels,
+    pub marker: Option<ShapedLine>,
+    pub marker_shift: Pixels,
+    pub hang: usize,
+    pub hang_width: Pixels,
 }
 
 impl Shaped {
@@ -29,46 +37,74 @@ impl Shaped {
             .unwrap_or(0)
     }
 
+    /// Distance from the text column; negative inside the hung syntax.
     pub fn x_of(&self, disp: usize, row: usize) -> Pixels {
-        self.line.unwrapped_layout.x_for_index(disp) - self.rows[row].x0
+        match &self.marker {
+            Some(m) if disp < self.hang => m.x_for_index(disp) - self.hang_width,
+            _ => self.line.unwrapped_layout.x_for_index(disp - self.hang) - self.rows[row].x0,
+        }
     }
 
     pub fn index_at(&self, row: usize, x: Pixels) -> usize {
-        let r = self.rows[row.min(self.rows.len() - 1)];
-        self.line
-            .unwrapped_layout
-            .closest_index_for_x(r.x0 + x)
-            .clamp(r.start, r.end)
+        let row = row.min(self.rows.len() - 1);
+        if let Some(m) = &self.marker
+            && row == 0
+            && x < px(0.)
+        {
+            return m.closest_index_for_x(x + self.hang_width).min(self.hang);
+        }
+        let r = self.rows[row];
+        (self.line.unwrapped_layout.closest_index_for_x(r.x0 + x.max(px(0.))) + self.hang)
+            .clamp(r.start.max(self.hang), r.end)
     }
 }
 
+/// Core Text reports the ascent of whatever fonts a line happens to use, so a
+/// Chinese line and a Latin one would sit at different heights inside the same
+/// fixed line. This pins every line's baseline to the same place.
+fn baseline_shift(d: &DisplayLine, ascent: Pixels, descent: Pixels) -> Pixels {
+    let natural = (d.line_height - ascent - descent) / 2. + ascent;
+    d.line_height / 2. + d.font_size * 0.35 - natural
+}
+
 pub fn shape(d: &DisplayLine, width: Pixels, window: &Window) -> Rc<Shaped> {
+    let hang = match d.runs.first() {
+        Some(first) if d.hang > 0 && first.len == d.hang => d.hang,
+        _ => 0,
+    };
+    let marker = (hang > 0).then(|| {
+        window.text_system().shape_line(
+            d.text[..hang].to_string().into(),
+            d.font_size,
+            &d.runs[..1],
+            None,
+        )
+    });
     let wrap = (width - d.margin * 2. - d.indent).max(px(40.));
+    let body: SharedString = if hang > 0 { d.text[hang..].to_string().into() } else { d.text.clone() };
+    let body_runs = if hang > 0 { &d.runs[1..] } else { &d.runs[..] };
     let line = window
         .text_system()
-        .shape_text(d.text.clone(), d.font_size, &d.runs, Some(wrap), None)
+        .shape_text(body.clone(), d.font_size, body_runs, Some(wrap), None)
         .ok()
         .and_then(|mut lines| lines.pop())
         .unwrap_or_default();
     let layout = &line.unwrapped_layout;
-    let len = d.text.len();
     let mut rows = Vec::with_capacity(line.wrap_boundaries.len() + 1);
     let mut start = 0;
     for b in &line.wrap_boundaries {
         let at = layout.runs[b.run_ix].glyphs[b.glyph_ix].index;
-        rows.push(Row { start, end: at, x0: layout.x_for_index(start) });
+        rows.push(Row { start: start + hang, end: at + hang, x0: layout.x_for_index(start) });
         start = at;
     }
-    rows.push(Row { start, end: len, x0: layout.x_for_index(start) });
+    rows.push(Row { start: start + hang, end: body.len() + hang, x0: layout.x_for_index(start) });
+    // The first row owns the hung syntax too.
+    rows[0].start = 0;
 
-    // Core Text reports the ascent of whatever fonts a line happens to use, so
-    // a Chinese line and a Latin one would sit at different heights inside the
-    // same fixed line. Pin every line's baseline to the same place instead.
-    let (asc, desc) = (layout.ascent, layout.descent);
-    let natural = (d.line_height - asc - desc) / 2. + asc;
-    let wanted = d.line_height / 2. + d.font_size * 0.35;
-    let baseline_shift = if d.text.is_empty() { px(0.) } else { wanted - natural };
-    Rc::new(Shaped { line, rows, baseline_shift })
+    let baseline = if body.is_empty() { px(0.) } else { baseline_shift(d, layout.ascent, layout.descent) };
+    let marker_shift = marker.as_ref().map_or(px(0.), |m| baseline_shift(d, m.ascent, m.descent));
+    let hang_width = marker.as_ref().map_or(px(0.), |m| m.width);
+    Rc::new(Shaped { line, rows, baseline_shift: baseline, marker, marker_shift, hang, hang_width })
 }
 
 pub struct Painted {
@@ -242,6 +278,11 @@ impl Element for LineEl {
             .paint_background(text_origin, lh, TextAlign::Left, None, window, cx);
         let _ = shaped.line.paint(text_origin, lh, TextAlign::Left, None, window, cx);
 
+        if let Some(marker) = &shaped.marker {
+            let at = origin + point(-shaped.hang_width, shaped.marker_shift);
+            let _ = marker.paint(at, lh, TextAlign::Left, None, window, cx);
+        }
+
         if let Some(mark) = &d.gutter {
             let run = TextRun {
                 len: mark.len(),
@@ -272,6 +313,81 @@ impl Element for LineEl {
             n_lines: 1,
             bounds,
             text: Some((self.display.clone(), shaped)),
+        });
+    }
+}
+
+/// A folded block. It records the bounds it really got, at paint time, so clicks
+/// can find it. A child overlay asked to fill the block came back several times
+/// too tall, and a list may prepaint an item more than once in a frame.
+pub struct BlockEl {
+    pub child: AnyElement,
+    pub first_line: usize,
+    pub n_lines: usize,
+    pub selected: bool,
+    pub painted: Rc<RefCell<Vec<Painted>>>,
+}
+
+impl IntoElement for BlockEl {
+    type Element = Self;
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl Element for BlockEl {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        (self.child.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.child.prepaint(window, cx);
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.child.paint(window, cx);
+        if self.selected {
+            window.paint_quad(fill(bounds, selection()));
+        }
+        self.painted.borrow_mut().push(Painted {
+            first_line: self.first_line,
+            n_lines: self.n_lines,
+            bounds,
+            text: None,
         });
     }
 }

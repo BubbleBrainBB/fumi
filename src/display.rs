@@ -70,6 +70,11 @@ pub struct DisplayLine {
     pub indent: Pixels,
     /// The page margin on each side; GPUI's `list` ignores horizontal padding.
     pub margin: Pixels,
+    /// Leading syntax on the caret's line, in visible bytes. It hangs left of
+    /// the text column, so showing it doesn't push the words sideways.
+    pub hang: usize,
+    /// A to-do whose box is drawn in the gutter.
+    pub task: bool,
     pub gutter: Option<SharedString>,
     pub deco: Deco,
 }
@@ -234,6 +239,8 @@ pub fn build_line(src: &str, cx: &LineCtx) -> DisplayLine {
     let mut indent = px(0.);
     let mut gutter = None;
     let mut deco = Deco::None;
+    let mut hang = 0;
+    let mut task_box = false;
 
     match cx.kind {
         Kind::Heading(level) => {
@@ -257,6 +264,7 @@ pub fn build_line(src: &str, cx: &LineCtx) -> DisplayLine {
             let hashes = hashes + usize::from(src.as_bytes().get(hashes) == Some(&b' '));
             if reveal {
                 b.add(0..hashes, run(&f, marker_gray()));
+                hang = hashes;
             }
             let color = if level >= 6 { ink2() } else { ink() };
             add_inline(&mut b, hashes..src.len(), &f, color, reveal);
@@ -279,7 +287,9 @@ pub fn build_line(src: &str, cx: &LineCtx) -> DisplayLine {
             }
             if reveal {
                 b.add(0..text_at.min(src.len()), run(&body, marker_gray()));
+                hang = text_at.min(src.len());
             } else {
+                task_box = task.is_some();
                 let bullet = src.as_bytes().get(n).copied().unwrap_or(b'-');
                 gutter = Some(match task {
                     Some(t) => SharedString::from(t),
@@ -299,6 +309,7 @@ pub fn build_line(src: &str, cx: &LineCtx) -> DisplayLine {
             deco = Deco::Quote;
             if reveal {
                 b.add(0..at, run(&body, marker_gray()));
+                hang = at;
             }
             add_inline(&mut b, at..src.len(), &body, ink2(), reveal);
         }
@@ -319,7 +330,13 @@ pub fn build_line(src: &str, cx: &LineCtx) -> DisplayLine {
             };
             match cx.kind {
                 Kind::FenceBody => b.add(0..src.len(), run(&mono, ink())),
-                _ if reveal => b.add(0..src.len(), run(&mono, marker_gray())),
+                _ if reveal => {
+                    let lang = src.trim_start_matches([' ', '`', '~']);
+                    let at = src.len() - lang.len();
+                    b.add(0..at, run(&mono, marker_gray()));
+                    b.add(at..src.len(), run(&mono, marker_gray()));
+                    hang = at;
+                }
                 Kind::FenceOpen => {
                     // The language tag alone, as a quiet label.
                     let lang = src.trim_start_matches([' ', '`', '~']);
@@ -348,6 +365,7 @@ pub fn build_line(src: &str, cx: &LineCtx) -> DisplayLine {
         Kind::Blank | Kind::Para => add_inline(&mut b, 0..src.len(), &body, ink(), reveal),
     }
 
+    let task = task_box;
     let mut runs = b.runs;
     let map = b.map;
     let text = b.text;
@@ -365,6 +383,8 @@ pub fn build_line(src: &str, cx: &LineCtx) -> DisplayLine {
         bottom,
         indent,
         margin: px(0.),
+        hang,
+        task,
         gutter,
         deco,
     }
