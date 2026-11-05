@@ -10,11 +10,12 @@ use fumi_core::note_store::{ReadError, read_note_file};
 use fumi_core::tabs::Content;
 use fumi_core::wiki_link::WikiLink;
 use fumi_editor::display::{LinkContext, Typography};
-use fumi_editor::editor::{Editor, EditorEvent};
+use fumi_editor::editor::{Editor, EditorEvent, ViewState};
 use fumi_ui::theme::t;
 use gpui::*;
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::Duration;
 
 /// One note open in a tab.
 pub struct NotePage {
@@ -26,6 +27,8 @@ pub struct NotePage {
     /// What the file held when the text being edited was last in step with it.
     pub base: String,
     pub error: Option<String>,
+    /// Whether the editor had the keyboard when its tab was last left.
+    had_focus: bool,
     _sub: Subscription,
 }
 
@@ -40,14 +43,19 @@ pub struct PageHost {
     /// filters, as in Swift.
     memos: Option<Entity<MemosView>>,
     typo: Typography,
+    /// Where each note was left, for opening it again within this launch: what
+    /// was selected, how far it was scrolled, whether it had the keyboard.
+    places: HashMap<String, (ViewState, bool)>,
+    /// The tab and note last on the page.
+    shown: Option<(String, String)>,
     _subs: Vec<Subscription>,
 }
 
 impl PageHost {
-    pub fn new(workspace: Entity<Workspace>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(workspace: Entity<Workspace>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let subs = vec![
-            cx.observe(&workspace, |this, _, cx| {
-                this.drop_closed_tabs(cx);
+            cx.observe_in(&workspace, window, |this, _, window, cx| {
+                this.drop_closed_tabs(window, cx);
                 cx.notify();
             }),
             cx.subscribe(&workspace, |this, _, e: &WorkspaceEvent, cx| {
@@ -64,6 +72,8 @@ impl PageHost {
             empty,
             memos: None,
             typo: Typography::from_settings(),
+            places: HashMap::new(),
+            shown: None,
             _subs: subs,
         }
     }
@@ -79,7 +89,7 @@ impl PageHost {
         cx.notify();
     }
 
-    fn drop_closed_tabs(&mut self, cx: &mut Context<Self>) {
+    fn drop_closed_tabs(&mut self, window: &Window, cx: &mut Context<Self>) {
         let w = self.workspace.read(cx);
         let tabs: HashMap<String, Content> = w.model.tabs().iter().map(|t| (t.id.clone(), t.content.clone())).collect();
         let gone: Vec<String> = self
@@ -95,7 +105,13 @@ impl PageHost {
         for id in gone {
             // Anything typed in the last half second goes to its own note first.
             self.flush(&id, cx);
-            self.pages.remove(&id);
+            if let Some(page) = self.pages.remove(&id)
+                && !page.is_draft
+            {
+                let editor = page.editor.read(cx);
+                let place = (editor.view_state(), editor.focus.is_focused(window));
+                self.places.insert(page.note_id, place);
+            }
         }
     }
 
@@ -121,24 +137,79 @@ impl PageHost {
         let links = self.link_context(&path, cx);
         let typo = self.typo.clone();
         let library = self.workspace.read(cx).workspace_path();
+        // Laid out at the page's size from its first frame, so what's restored
+        // below is what's drawn.
+        let pane = self.pages.values().find_map(|p| {
+            let e = p.editor.read(cx);
+            Some((e.pane_width?, e.pane_height?))
+        });
+        let place = if is_draft { None } else { self.places.get(&note_id).copied() };
         let editor = cx.new(move |cx| {
             let mut e = Editor::new(bytes, Some(path), true, cx);
             e.typo = typo;
             e.links = links;
             e.library = library;
+            e.draft_placeholder = is_draft;
+            if let Some((width, height)) = pane {
+                e.pane_width = Some(width);
+                e.pane_height = Some(height);
+            }
+            if let Some((state, _)) = place {
+                e.restore_view(state);
+            }
             e
         });
-        if is_draft {
-            window.focus(&editor.read(cx).focus.clone(), cx);
-        }
         let tab = tab_id.to_string();
         let sub = cx.subscribe_in(&editor, window, move |this, _, event: &EditorEvent, window, cx| {
             this.on_editor_event(&tab, event, window, cx);
         });
         self.pages.insert(
             tab_id.to_string(),
-            NotePage { editor, note_id, is_draft, base: text, error, _sub: sub },
+            NotePage {
+                editor,
+                note_id,
+                is_draft,
+                base: text,
+                error,
+                had_focus: place.is_some_and(|(_, focused)| focused),
+                _sub: sub,
+            },
         );
+    }
+
+    /// What changes when another tab or note comes up. The editor left keeps its
+    /// state and notes whether it had the keyboard. The one arriving gets it if it
+    /// had it then, and a draft always does, with the caret at its end.
+    fn page_shown(&mut self, tab: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let note = self.pages.get(tab).map(|page| page.note_id.clone());
+        let arriving = note.map(|note| (tab.to_string(), note));
+        if self.shown == arriving {
+            return;
+        }
+        let mut was_focused = false;
+        if let Some((old_tab, old_note)) = self.shown.take()
+            && let Some(old) = self.pages.get_mut(&old_tab)
+            && old.note_id == old_note
+        {
+            old.had_focus = old.editor.read(cx).focus.is_focused(window);
+            was_focused = old.had_focus;
+            old.editor.update(cx, |e, cx| e.left_view(window, cx));
+        }
+        self.shown = arriving;
+        let Some(page) = self.pages.get(tab) else {
+            if was_focused {
+                window.blur(cx);
+            }
+            return;
+        };
+        if page.is_draft {
+            page.editor.update(cx, |e, _| e.caret_to_end());
+        }
+        if page.is_draft || page.had_focus {
+            window.focus(&page.editor.read(cx).focus.clone(), cx);
+        } else if was_focused {
+            window.blur(cx);
+        }
     }
 
     fn link_context(&self, note: &Path, cx: &App) -> Option<LinkContext> {
@@ -172,6 +243,32 @@ impl PageHost {
                     let new_tab = *new_tab;
                     self.workspace.update(cx, |w, cx| {
                         w.model.follow_link(&id, new_tab);
+                        w.navigated(cx);
+                    });
+                    // In this tab, at the heading it names, once its editor is up.
+                    if let Some(heading) = link.heading.filter(|_| !new_tab) {
+                        cx.spawn(async move |this: WeakEntity<PageHost>, cx| {
+                            cx.background_executor().timer(Duration::from_millis(350)).await;
+                            let _ = this.update(cx, |host, cx| {
+                                let active = host.workspace.read(cx).model.active_id().to_string();
+                                if let Some(page) = host.pages.get(&active) {
+                                    page.editor.update(cx, |e, cx| e.scroll_to_heading_named(&heading, cx));
+                                }
+                            });
+                        })
+                        .detach();
+                    }
+                }
+            }
+            EditorEvent::CreateNote { name, new_tab } => {
+                let Some(page) = self.pages.get(tab) else { return };
+                let folder = Path::new(&page.note_id).parent().map(Path::to_path_buf);
+                let new_tab = *new_tab;
+                let created = self.workspace.update(cx, |w, _| w.store.create_note(Some(name), folder.as_deref(), now()));
+                if let Ok(Some(note)) = created {
+                    self.workspace.update(cx, |w, cx| {
+                        w.model.follow_link(&note.id, new_tab);
+                        w.library_changed(cx);
                         w.navigated(cx);
                     });
                 }
@@ -215,6 +312,7 @@ impl PageHost {
                 }
                 if saved.adopted_draft {
                     page.is_draft = false;
+                    page.editor.update(cx, |e, _| e.draft_placeholder = false);
                     let tab = tab.to_string();
                     self.workspace.update(cx, |w, cx| {
                         w.model.adopt_draft(&note_id, &tab);
@@ -300,6 +398,7 @@ impl Render for PageHost {
             }
         }
         self.ensure_page(&tab, &content, window, cx);
+        self.page_shown(&tab, window, cx);
         let body = div().size_full().bg(c.page_content);
         match &content {
             Content::File(id) => {

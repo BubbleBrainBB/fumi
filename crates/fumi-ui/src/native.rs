@@ -458,17 +458,34 @@ fn build_menu(rows: &[MenuRow], target: id, next_tag: &mut i64) -> id {
                     let _: () = msg_send![menu, addItem: sep];
                 }
                 MenuRow::Label(title) => {
-                    let item: id = msg_send![class!(NSMenuItem), alloc];
-                    let item: id = msg_send![item, initWithTitle: ns(title) action: sel!(fumiNoop:) keyEquivalent: ns("")];
-                    let _: () = msg_send![item, setEnabled: false];
+                    // The system's section header, from macOS 14.
+                    let header: bool = msg_send![class!(NSMenuItem), respondsToSelector: sel!(sectionHeaderWithTitle:)];
+                    let item: id = if header {
+                        msg_send![class!(NSMenuItem), sectionHeaderWithTitle: ns(title)]
+                    } else {
+                        let item: id = msg_send![class!(NSMenuItem), alloc];
+                        let item: id = msg_send![item, initWithTitle: ns(title) action: sel!(fumiNoop:) keyEquivalent: ns("")];
+                        let _: () = msg_send![item, setEnabled: false];
+                        item
+                    };
                     let _: () = msg_send![menu, addItem: item];
                 }
                 MenuRow::Item { title, enabled, destructive, key } => {
                     let item: id = msg_send![class!(NSMenuItem), alloc];
+                    // A key starting `⌥` shows as ⌥⌘, for one that isn't plain ⌘.
+                    let key = key.as_deref().unwrap_or("");
+                    let (plain, option) = match key.strip_prefix('⌥') {
+                        Some(rest) => (rest, true),
+                        None => (key, false),
+                    };
                     let item: id = msg_send![item,
                         initWithTitle: ns(title)
                         action: sel!(fumiMenuAction:)
-                        keyEquivalent: ns(key.as_deref().unwrap_or(""))];
+                        keyEquivalent: ns(plain)];
+                    if option {
+                        // NSEventModifierFlagCommand | NSEventModifierFlagOption.
+                        let _: () = msg_send![item, setKeyEquivalentModifierMask: (1u64 << 20) | (1u64 << 19)];
+                    }
                     let _: () = msg_send![item, setTarget: target];
                     let _: () = msg_send![item, setTag: *next_tag];
                     *next_tag += 1;
@@ -580,6 +597,59 @@ pub fn choose_notes_folder(start: Option<&std::path::Path>) -> Option<std::path:
         }
         let url: id = msg_send![panel, URL];
         path_of_url(url)
+    }
+}
+
+/// Asks for images and movies in a sheet on `window`, and hands over the chosen
+/// paths once it closes (none if cancelled). Returns at once.
+pub fn choose_media_files(window: id, done: impl FnOnce(Vec<std::path::PathBuf>) + 'static) {
+    use block::ConcreteBlock;
+    use std::cell::RefCell;
+    load_framework("UniformTypeIdentifiers");
+    unsafe {
+        let panel: id = msg_send![class!(NSOpenPanel), openPanel];
+        if panel == nil || window == nil {
+            done(Vec::new());
+            return;
+        }
+        let _: () = msg_send![panel, setAllowsMultipleSelection: true];
+        let _: () = msg_send![panel, setCanChooseDirectories: false];
+        let _: () = msg_send![panel, setPrompt: ns("Insert")];
+        if let Some(class) = class_named("UTType") {
+            let types: id = msg_send![class!(NSMutableArray), array];
+            for identifier in ["public.image", "public.movie"] {
+                let t: id = msg_send![class, typeWithIdentifier: ns(identifier)];
+                if t != nil {
+                    let _: () = msg_send![types, addObject: t];
+                }
+            }
+            let _: () = msg_send![panel, setAllowedContentTypes: types];
+        }
+        let done = RefCell::new(Some(done));
+        let handler = ConcreteBlock::new(move |response: i64| {
+            let Some(done) = done.borrow_mut().take() else { return };
+            let mut paths = Vec::new();
+            if response == 1 {
+                let urls: id = msg_send![panel, URLs];
+                let count: usize = msg_send![urls, count];
+                for i in 0..count {
+                    let url: id = msg_send![urls, objectAtIndex: i];
+                    paths.extend(path_of_url(url));
+                }
+            }
+            done(paths);
+        })
+        .copy();
+        let _: () = msg_send![panel, beginSheetModalForWindow: window completionHandler: &*handler];
+    }
+}
+
+/// Settings › Accessibility › Reduce Motion.
+pub fn reduce_motion() -> bool {
+    unsafe {
+        let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+        let on: objc::runtime::BOOL = msg_send![workspace, accessibilityDisplayShouldReduceMotion];
+        on == objc::runtime::YES
     }
 }
 

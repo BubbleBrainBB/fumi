@@ -66,7 +66,10 @@ impl Typography {
 
     pub fn from_settings() -> Self {
         use fumi_ui::settings as s;
-        Self::new(&s::editor_font(), s::font_size() as f32, s::line_height() as f32)
+        // A family that's gone falls back to the system font.
+        let family = s::editor_font();
+        let family = if crate::fonts::is_available(&family) { family } else { "System".to_string() };
+        Self::new(&family, s::font_size() as f32, s::line_height() as f32)
     }
 
     pub fn body(&self) -> Font {
@@ -137,22 +140,29 @@ const SERIF_HINTS: &[&str] = &[
     "tinos", "bitter", "domine", "alegreya", "cormorant", "vollkorn", "arvo",
 ];
 
-/// Families that cover Han themselves, and the system ones, keep their cascade.
-const SELF_COVERING_HINTS: &[&str] = &[
-    "pingfang", "songti", "heiti", "kaiti", "hiragino", "stsong", "stheiti", "noto sans cjk",
-    "noto serif cjk", "source han", "lantinghei", "yuanti", "wawati", "weibei", "xingkai",
-];
+/// CJK partners for a serif family, most preferred first.
+const SERIF_PARTNERS: &[&str] = &["Songti SC", "STSong", "Songti TC"];
+/// …and for any other.
+const SANS_PARTNERS: &[&str] = &["PingFang SC", "Hiragino Sans GB"];
 
 impl Composite {
     pub fn for_family(family: &str) -> Option<Composite> {
-        let name = family.to_lowercase();
-        if matches!(family, "System" | "SF Mono" | "")
-            || SELF_COVERING_HINTS.iter().any(|h| name.contains(h))
-        {
+        if matches!(family, "System" | "SF Mono" | "") {
             return None;
         }
-        let serif = SERIF_HINTS.iter().any(|h| name.contains(h));
-        Some(Composite { family: if serif { "Songti SC" } else { "PingFang SC" }, scale: 0.97 })
+        Self::pick(family, crate::fonts::covers_han(family), crate::fonts::is_installed)
+    }
+
+    /// System and SF Mono ride the native cascade and a family covering Han sets
+    /// both scripts itself; any other pairs with the first partner installed.
+    pub fn pick(family: &str, covers_han: bool, installed: impl Fn(&str) -> bool) -> Option<Composite> {
+        if matches!(family, "System" | "SF Mono" | "") || covers_han {
+            return None;
+        }
+        let name = family.to_lowercase();
+        let partners = if SERIF_HINTS.iter().any(|h| name.contains(h)) { SERIF_PARTNERS } else { SANS_PARTNERS };
+        let family = *partners.iter().find(|p| installed(p))?;
+        Some(Composite { family, scale: 0.97 })
     }
 }
 
@@ -219,6 +229,8 @@ pub struct Span {
 #[derive(Clone)]
 pub struct InlineMath {
     pub latex: String,
+    /// Written `$$…$$` in the middle of a line: display size, on the line.
+    pub display: bool,
     /// Typeset and filled in by the editor; `None` shows the source's box empty.
     pub rendered: Option<std::rc::Rc<ratex_gpui::render::Rendered>>,
 }
@@ -560,6 +572,26 @@ pub fn inline_math_spans(s: &str) -> Vec<(Range<usize>, Range<usize>)> {
     out
 }
 
+/// `$$…$$` within a line, not after a backslash, at least one character inside.
+pub fn display_math_spans(s: &str) -> Vec<(Range<usize>, Range<usize>)> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(p) = s[i..].find("$$").map(|p| p + i) {
+        if p > 0 && s.as_bytes()[p - 1] == b'\\' {
+            i = p + 2;
+            continue;
+        }
+        let inner_start = p + 2;
+        let Some(first) = s[inner_start..].chars().next() else { break };
+        let Some(close) = s[inner_start + first.len_utf8()..].find("$$").map(|c| c + inner_start + first.len_utf8()) else {
+            break;
+        };
+        out.push((p..close + 2, inner_start..close));
+        i = close + 2;
+    }
+    out
+}
+
 pub fn is_web_address(address: &str) -> bool {
     let l = address.to_lowercase();
     l.starts_with("http://") || l.starts_with("https://") || l.starts_with("mailto:")
@@ -671,7 +703,7 @@ fn inline_pass(
     links_ctx: Option<&LinkContext>,
     links: &mut Vec<(Range<usize>, Link)>,
     atoms: &mut Vec<(Range<usize>, String, Option<Link>)>,
-    latex: &mut Vec<(Range<usize>, String)>,
+    latex: &mut Vec<(Range<usize>, String, bool)>,
     media: &mut MediaPass,
 ) {
     if range.is_empty() {
@@ -903,7 +935,15 @@ fn inline_pass(
     }
 
     if math_ok && s.contains('$') {
-        for (full, inner) in inline_math_spans(s) {
+        // Display first, so `$$` isn't read as two empty inline spans.
+        let display = display_math_spans(s);
+        let mut masked = s.to_string();
+        for (full, _) in &display {
+            masked.replace_range(full.clone(), &" ".repeat(full.len()));
+        }
+        let inline = inline_math_spans(&masked);
+        let spans = display.into_iter().map(|(full, inner)| (full, inner, true)).chain(inline.into_iter().map(|(full, inner)| (full, inner, false)));
+        for (full, inner, is_display) in spans {
             if skip(&full) {
                 continue;
             }
@@ -911,7 +951,7 @@ fn inline_pass(
                 st.set(at + full.start..at + full.end, RAW_MONO);
             } else {
                 st.set(at + full.start..at + full.end, MATH);
-                latex.push((at + full.start..at + full.end, s[inner].to_string()));
+                latex.push((at + full.start..at + full.end, s[inner].trim().to_string(), is_display));
             }
         }
     }
@@ -1092,7 +1132,7 @@ pub fn build_line(src: &str, cx: &LineCtx) -> DisplayLine {
     let mut code_language = None;
     let mut links = Vec::new();
     let mut atoms: Vec<(Range<usize>, String, Option<Link>)> = Vec::new();
-    let mut latex: Vec<(Range<usize>, String)> = Vec::new();
+    let mut latex: Vec<(Range<usize>, String, bool)> = Vec::new();
     let mut inline_from = 0;
     let mut inline = true;
     let mut math_ok = true;
@@ -1512,6 +1552,8 @@ struct Assembler<'a> {
     spans: Vec<Span>,
     map: Vec<MapSeg>,
     links: Vec<(Range<usize>, Link)>,
+    /// The last character that could take a face, for punctuation to go by.
+    prev_composite: Option<char>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1529,17 +1571,39 @@ fn script_of(c: char) -> Script {
     }
 }
 
-fn composite_claims(c: char, prev_cjk: bool) -> bool {
-    let u = c as u32;
-    if matches!(u,
-        0x2E80..=0x2FDF | 0x3000..=0x30FF | 0x3100..=0x312F | 0x3130..=0x318F | 0x31A0..=0x31BF
-        | 0x31F0..=0x31FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xAC00..=0xD7AF | 0xF900..=0xFAFF
-        | 0xFE30..=0xFE4F | 0xFF00..=0xFFEF | 0x20000..=0x2FA1F)
-    {
-        return true;
+/// What `CompositeFont.category` sorts a character into.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FaceClaim {
+    /// Han, kana, hangul, fullwidth forms, CJK punctuation: the paired face.
+    Cjk,
+    /// Quotes, dashes, currency: go with a neighbour.
+    Punctuation,
+    Other,
+}
+
+pub fn face_claim(c: char) -> FaceClaim {
+    match c as u32 {
+        0x2E80..=0x2EFF | 0x2F00..=0x2FDF | 0x3000..=0x303F | 0x3040..=0x30FF | 0x3100..=0x312F
+        | 0x31A0..=0x31BF | 0x3130..=0x318F | 0x31F0..=0x31FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF
+        | 0xA960..=0xA97F | 0xAC00..=0xD7AF | 0xD7B0..=0xD7FF | 0xF900..=0xFAFF | 0xFE30..=0xFE4F
+        | 0xFF01..=0xFFEE | 0x20000..=0x2FA1F | 0x30000..=0x3134F => FaceClaim::Cjk,
+        0x2010..=0x2027 | 0x2030..=0x205E | 0x2070..=0x209F | 0x20A0..=0x20CF => FaceClaim::Punctuation,
+        _ => FaceClaim::Other,
     }
-    // Curly quotes, dashes, ellipsis follow what's before them.
-    matches!(u, 0x2010..=0x2027 | 0x2030..=0x205E) && prev_cjk
+}
+
+/// Whether `c` is set in the paired face. A quote belongs to what it quotes, so
+/// an opening one follows the character after it, whatever precedes; closing
+/// quotes, dashes and the rest follow the character before them.
+pub fn takes_cjk_face(c: char, previous: Option<char>, next: impl FnOnce() -> Option<char>) -> bool {
+    match face_claim(c) {
+        FaceClaim::Cjk => true,
+        FaceClaim::Punctuation => {
+            let neighbour = if matches!(c, '\u{2018}' | '\u{201C}') { next() } else { previous };
+            neighbour.is_some_and(|n| face_claim(n) == FaceClaim::Cjk)
+        }
+        FaceClaim::Other => false,
+    }
 }
 
 impl Assembler<'_> {
@@ -1554,6 +1618,7 @@ impl Assembler<'_> {
             spans: Vec::with_capacity(8),
             map: Vec::with_capacity(8),
             links: Vec::new(),
+            prev_composite: None,
         }
     }
 
@@ -1615,6 +1680,7 @@ impl Assembler<'_> {
         }
         if flags & RAW_MONO != 0 {
             font = mono_font();
+            size = typo.small;
         }
         if flags & SYN_KEYWORD != 0 {
             color = c.syntax_keyword;
@@ -1651,7 +1717,16 @@ impl Assembler<'_> {
         }
     }
 
-    fn push_text(&mut self, range: Range<usize>, flags: u32) {
+    /// The first character at or after `at` that isn't collapsed syntax.
+    fn next_visible(&self, st: &Styled, at: usize) -> Option<char> {
+        let mut i = at;
+        while i < st.flags.len() && st.flags[i] & HIDDEN != 0 {
+            i += 1;
+        }
+        self.src.get(i..)?.chars().next()
+    }
+
+    fn push_text(&mut self, st: &Styled, range: Range<usize>, flags: u32) {
         if range.is_empty() {
             return;
         }
@@ -1665,11 +1740,17 @@ impl Assembler<'_> {
         let mut start = 0;
         let mut prev: Option<(char, Script)> = self.last_visible();
         let composite = self.typo.composite.as_ref().filter(|_| !fixed_pitch);
-        let mut prev_cjk = prev.is_some_and(|(p, _)| composite_claims(p, false));
         let mut piece_cjk = None::<bool>;
         for (i, ch) in text.char_indices() {
             let script = script_of(ch);
-            let cjk = composite.is_some() && composite_claims(ch, prev_cjk);
+            let cjk = composite.is_some()
+                && takes_cjk_face(ch, self.prev_composite, || {
+                    let after = i + ch.len_utf8();
+                    text[after..].chars().next().or_else(|| self.next_visible(st, range.end))
+                });
+            if composite.is_some() {
+                self.prev_composite = Some(ch);
+            }
             let gap = !fixed_pitch
                 && prev.is_some_and(|(_, s)| {
                     (s == Script::Han && script == Script::Latin) || (s == Script::Latin && script == Script::Han)
@@ -1686,7 +1767,6 @@ impl Assembler<'_> {
             }
             piece_cjk = Some(cjk);
             prev = Some((ch, script));
-            prev_cjk = cjk;
         }
         if start < text.len() {
             self.push_piece(range.start + start..range.end, &span, piece_cjk == Some(true), flags);
@@ -1710,11 +1790,13 @@ impl Assembler<'_> {
         let mut piece = span.clone();
         piece.range = disp..disp + text.len();
         if cjk && let Some(comp) = &self.typo.composite {
-            let (weight, style) = (piece.font.weight, piece.font.style);
+            // Its weight, and never a slant: the paired faces have no italic and a
+            // synthesised one on Han is the failure this exists to avoid.
+            let weight = piece.font.weight;
             piece.font = font(comp.family);
             piece.font.weight = weight;
-            piece.font.style = style;
-            piece.size = px((f32::from(piece.size) * comp.scale * 2.).round() / 2.);
+            piece.font.style = FontStyle::Normal;
+            piece.size = piece.size * comp.scale;
         }
         self.map.push(MapSeg { disp, src: range.start, disp_len: text.len(), src_len: text.len() });
         // Room for the pills: kerning on the last character of a span and on
@@ -1728,12 +1810,12 @@ impl Assembler<'_> {
         self.spans.push(piece);
     }
 
-    fn push_atom(&mut self, range: Range<usize>, text: &str, flags: u32, link: Option<Link>, math: Option<String>) {
+    fn push_atom(&mut self, range: Range<usize>, text: &str, flags: u32, link: Option<Link>, math: Option<(String, bool)>) {
         let disp = self.text.len();
         self.text.push_str(text);
         let mut span = self.span_for(flags & !HIDDEN);
         span.range = disp..disp + text.len();
-        span.math = math.map(|latex| InlineMath { latex, rendered: None });
+        span.math = math.map(|(latex, display)| InlineMath { latex, display, rendered: None });
         if let Some(link) = link {
             span.underline = Some(Underline { color: self.c.link_underline, dashed: false });
             self.links.push((disp..disp + text.len(), link));
@@ -1764,7 +1846,7 @@ impl Assembler<'_> {
         &mut self,
         st: &Styled,
         atoms: &[(Range<usize>, String, Option<Link>)],
-        latex: &[(Range<usize>, String)],
+        latex: &[(Range<usize>, String, bool)],
         title: Option<&(Range<usize>, String)>,
         media: &[MediaAtom],
     ) {
@@ -1785,9 +1867,9 @@ impl Assembler<'_> {
                 i = range.end;
                 continue;
             }
-            if let Some((range, inner)) = latex.iter().find(|a| a.0.start == i) {
+            if let Some((range, inner, display)) = latex.iter().find(|a| a.0.start == i) {
                 // One object-replacement character stands for the box.
-                self.push_atom(range.clone(), "\u{FFFC}", 0, None, Some(inner.clone()));
+                self.push_atom(range.clone(), "\u{FFFC}", 0, None, Some((inner.clone(), *display)));
                 i = range.end;
                 continue;
             }
@@ -1810,7 +1892,7 @@ impl Assembler<'_> {
                 j += 1;
             }
             if f & HIDDEN == 0 {
-                self.push_text(i..j, f);
+                self.push_text(st, i..j, f);
             }
             i = j;
         }
@@ -2013,6 +2095,93 @@ mod tests {
         assert_eq!(d.text.as_ref(), "标题");
         let d = line("::: warning", Kind::CalloutOpen, false);
         assert_eq!(d.text.as_ref(), "warning");
+    }
+
+    #[core::prelude::v1::test]
+    fn display_math_can_sit_in_a_line() {
+        assert_eq!(display_math_spans("a $$x$$ b"), [(2..7, 4..5)]);
+        assert_eq!(display_math_spans("\\\\$$x$$"), []);
+        assert_eq!(display_math_spans("$$$$"), []);
+        let d = line("a $$x^2$$ b", Kind::Para, false);
+        assert_eq!(d.text.as_ref(), "a \u{FFFC} b");
+        let math: Vec<_> = d.spans.iter().filter_map(|s| s.math.as_ref()).collect();
+        assert_eq!(math.len(), 1);
+        assert!(math[0].display);
+        assert_eq!(math[0].latex, "x^2");
+        // Both kinds on one line.
+        let d = line("$a$ and $$b$$", Kind::Para, false);
+        let flags: Vec<bool> = d.spans.iter().filter_map(|s| s.math.as_ref()).map(|m| m.display).collect();
+        assert_eq!(flags, [false, true]);
+        // On the caret: its source, small and monospaced.
+        let d = line_at("a $$x$$ b", Kind::Para, Some(4));
+        assert_eq!(d.text.as_ref(), "a $$x$$ b");
+        let typo = Typography::default();
+        assert!(d.spans.iter().any(|s| s.size == px(typo.small)));
+    }
+
+    #[core::prelude::v1::test]
+    fn the_paired_face_goes_by_the_families_installed() {
+        let has = |names: &'static [&'static str]| move |f: &str| names.contains(&f);
+        let pick = |family: &str, han: bool, names: &'static [&'static str]| Composite::pick(family, han, has(names)).map(|c| c.family);
+        assert_eq!(pick("Georgia", false, &["Songti SC", "PingFang SC"]), Some("Songti SC"));
+        assert_eq!(pick("Georgia", false, &["STSong", "PingFang SC"]), Some("STSong"));
+        assert_eq!(pick("Georgia", false, &["Songti TC"]), Some("Songti TC"));
+        assert_eq!(pick("Georgia", false, &["PingFang SC"]), None);
+        assert_eq!(pick("Helvetica", false, &["Hiragino Sans GB"]), Some("Hiragino Sans GB"));
+        assert_eq!(pick("Helvetica", false, &["PingFang SC", "Hiragino Sans GB"]), Some("PingFang SC"));
+        assert_eq!(pick("Noto Sans CJK", true, &["PingFang SC"]), None);
+        assert_eq!(pick("System", false, &["PingFang SC"]), None);
+        assert_eq!(pick("SF Mono", false, &["PingFang SC"]), None);
+    }
+
+    #[core::prelude::v1::test]
+    fn quotes_take_the_face_of_what_they_quote() {
+        let next = |c: char| move || Some(c);
+        // Opening quotes look ahead, whatever precedes them.
+        assert!(takes_cjk_face('“', Some('a'), next('中')));
+        assert!(!takes_cjk_face('“', Some('中'), next('a')));
+        // Closing quotes and dashes look back.
+        assert!(takes_cjk_face('”', Some('中'), next('a')));
+        assert!(!takes_cjk_face('—', Some('a'), next('中')));
+        // A punctuation mark before it doesn't count as CJK.
+        assert!(!takes_cjk_face('—', Some('”'), next('中')));
+        assert!(takes_cjk_face('。', None, || None));
+        assert!(!takes_cjk_face('a', Some('中'), next('中')));
+        assert_eq!(face_claim('\u{FF00}'), FaceClaim::Other);
+        assert_eq!(face_claim('\u{FF01}'), FaceClaim::Cjk);
+        assert_eq!(face_claim('€'), FaceClaim::Punctuation);
+    }
+
+    #[core::prelude::v1::test]
+    fn an_opening_quote_skips_collapsed_syntax() {
+        // Without a composite face nothing here changes, so go by the pure rule
+        // over the same source the assembler would see.
+        let typo = Typography {
+            composite: Some(Composite { family: "Songti SC", scale: 0.97 }),
+            ..Typography::new("Georgia", 16., 1.7)
+        };
+        let d = build_line(
+            "“**中**”",
+            &LineCtx {
+                kind: Kind::Para,
+                caret: None,
+                title: false,
+                marked: None,
+                prev: Kind::Blank,
+                next: Kind::Blank,
+                block_type: "",
+                typo: &typo,
+                links: None,
+                real: false,
+                raw_block: false,
+                prev_has_caret: false,
+                media: None,
+                reveal_media: true,
+            },
+        );
+        assert_eq!(d.text.as_ref(), "“中”");
+        assert!(d.spans.iter().all(|s| s.font.family.as_ref() == "Songti SC"), "the quotes pair too");
+        assert!(d.spans.iter().all(|s| s.font.style == FontStyle::Normal));
     }
 
     #[core::prelude::v1::test]

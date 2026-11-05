@@ -336,7 +336,7 @@ impl Laid {
         self.run_at.last().copied().unwrap_or(0)
     }
 
-    fn last_index_before(&self, end: usize) -> usize {
+    pub fn last_index_before(&self, end: usize) -> usize {
         let k = self.glyphs.partition_point(|g| (g.index as usize) < end);
         if k == 0 { 0 } else { self.glyphs[k - 1].index as usize }
     }

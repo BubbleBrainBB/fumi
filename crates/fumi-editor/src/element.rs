@@ -8,7 +8,7 @@ use crate::video::{self, VideoUi};
 use fumi_ui::native::{self, SymbolCache};
 use fumi_ui::theme::t;
 use gpui::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -178,11 +178,49 @@ fn hang_x(d: &DisplayLine, run_x: &[Pixels]) -> Pixels {
         .unwrap_or_else(|| run_x.last().copied().unwrap_or_default())
 }
 
+/// How much of the page stays clear around the caret when it scrolls into view.
+const CARET_ROOM: f32 = 30.;
+
 pub struct Painted {
     pub first_line: usize,
     pub n_lines: usize,
     pub bounds: Bounds<Pixels>,
     pub text: Option<(Rc<DisplayLine>, Rc<Shaped>)>,
+}
+
+/// A draft's two faint lines.
+pub const DRAFT_TITLE: &str = "Title";
+pub const DRAFT_HINT: &str = "Start typing — the note is saved once you write something.";
+
+/// The font the caret is measured by: the one of the text before it, or the
+/// line's own at its start. Under 80% of the body size it's the body size, so it
+/// never shrinks beside something small.
+pub fn caret_font(d: &DisplayLine, caret: usize, body: Pixels) -> (Font, Pixels) {
+    let before = d
+        .spans
+        .iter()
+        .rfind(|s| s.range.start < caret && s.range.end >= caret && s.math.is_none() && s.media.is_none());
+    let (font, size) = before.map_or((d.base_font.clone(), d.font_size), |s| (s.font.clone(), s.size));
+    (font, if size < body * 0.8 { body } else { size })
+}
+
+/// The caret's top and height in a row: as tall as the font, standing on the
+/// baseline, inside the row, whole points. A font as tall as the row fills it.
+pub fn caret_box(baseline: f32, ascent: f32, descent: f32, row_top: f32, row_height: f32) -> (f32, f32) {
+    let height = (ascent + descent).ceil();
+    if height >= row_height {
+        return (row_top, row_height);
+    }
+    let top = (baseline - ascent).max(row_top).min(row_top + row_height - height);
+    (top.floor(), height)
+}
+
+/// The rectangle `request_autoscroll` is given so the list moves its content by
+/// `shift` (down if positive), with no padding of its own: the viewport's top or
+/// bottom edge is pushed past by exactly that much.
+pub fn shifting_rect(view: Bounds<Pixels>, shift: Pixels) -> Bounds<Pixels> {
+    let y = if shift > px(0.) { view.top() - shift } else { view.bottom() - shift - px(1.) };
+    Bounds::new(point(view.left(), y), size(px(1.), px(1.)))
 }
 
 pub struct LineEl {
@@ -199,6 +237,16 @@ pub struct LineEl {
     pub shaped: Rc<RefCell<Option<(Pixels, Rc<Shaped>)>>>,
     pub symbols: Rc<RefCell<SymbolCache>>,
     pub videos: Rc<RefCell<VideoUi>>,
+    /// The body size, which the caret never measures under.
+    pub body_size: Pixels,
+    /// Where the row holding `caret_head` (or the first) must stand after this
+    /// layout, and the list's viewport to move it in.
+    pub keep_at: Option<(Pixels, Bounds<Pixels>)>,
+    /// The open slash menu's slash, if it's on this line: visible offset, and
+    /// where to report its row's box.
+    pub slash: Option<(usize, Rc<Cell<Option<Bounds<Pixels>>>>)>,
+    /// An untouched draft: the body font, for the hint under the title.
+    pub placeholder: Option<(Font, Pixels)>,
 }
 
 impl IntoElement for LineEl {
@@ -296,7 +344,7 @@ impl Element for LineEl {
         window: &mut Window,
         _: &mut App,
     ) {
-        if !self.autoscroll {
+        if !self.autoscroll && self.keep_at.is_none() && self.slash.is_none() {
             return;
         }
         let d = &self.display;
@@ -305,10 +353,28 @@ impl Element for LineEl {
             Some((w, s)) if w == bounds.size.width => s,
             _ => shape(d, bounds.size.width, window),
         };
+        if let Some((disp, cell)) = &self.slash {
+            let row = shaped.row_of(*disp);
+            let r = shaped.laid.rows[row];
+            let x = bounds.left() + d.margin + d.indent + shaped.x_of(*disp, row);
+            cell.set(Some(Bounds::new(point(x, bounds.top() + d.top + r.y), size(px(1.), r.height))));
+        }
         let row = shaped.row_of(self.caret_head.unwrap_or(0));
         let top = bounds.top() + d.top + shaped.laid.rows[row].y;
         let height = shaped.laid.rows[row].height;
-        window.request_autoscroll(Bounds::new(point(bounds.left(), top), size(px(1.), height)));
+        // Heights above may have changed: put this row back where it stood.
+        if let Some((want, view)) = self.keep_at {
+            let shift = want - top;
+            if f32::from(shift).abs() > 0.5 && view.size.height > px(0.) {
+                window.request_autoscroll(shifting_rect(view, shift));
+                return;
+            }
+        }
+        if self.autoscroll {
+            // With the same room around it as the page has at its ends.
+            let room = px(CARET_ROOM);
+            window.request_autoscroll(Bounds::new(point(bounds.left(), top - room), size(px(1.), height + room * 2.)));
+        }
     }
 
     fn paint(
@@ -494,15 +560,18 @@ impl Element for LineEl {
                 let base = top_y + row.y + shaped.baseline(i);
                 if let Some(u) = span.underline {
                     let y = (base + px(2.)).round();
+                    // A link under the pointer darkens its line.
+                    let over = self.hovered.as_ref().is_some_and(|h| h.start < span.range.end && span.range.start < h.end);
+                    let color = if over { c.text.opacity(0.7) } else { u.color };
                     if u.dashed {
                         let mut x = x0;
                         while x < x1 {
                             let w = px(3.).min(x1 - x);
-                            window.paint_quad(fill(Bounds::new(point(x, y), size(w, px(1.))), u.color));
+                            window.paint_quad(fill(Bounds::new(point(x, y), size(w, px(1.))), color));
                             x += px(5.);
                         }
                     } else {
-                        window.paint_quad(fill(Bounds::new(point(x0, y), size(x1 - x0, px(1.))), u.color));
+                        window.paint_quad(fill(Bounds::new(point(x0, y), size(x1 - x0, px(1.))), color));
                     }
                 }
                 if let Some(color) = span.strike {
@@ -639,13 +708,50 @@ impl Element for LineEl {
             let _ = line.paint(point(x, top_y - px(*above)), px(15.), TextAlign::Left, None, window, cx);
         }
 
+        // A draft's faint title, right past the `# `, and the hint under it. As
+        // the Swift draws them: over the line's whole rectangle, spacing included.
+        if let Some((body_font, body_size)) = &self.placeholder {
+            let run = |len: usize, font: Font| TextRun {
+                len,
+                font,
+                color: c.faint_icon,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            let line_height = laid.rows[0].height + d.bottom;
+            let title = window.text_system().shape_line(
+                DRAFT_TITLE.into(),
+                d.font_size,
+                &[run(DRAFT_TITLE.len(), d.base_font.clone())],
+                None,
+            );
+            let title_box = title.ascent + title.descent;
+            let x = text_x + shaped.x_of(d.text.len(), 0);
+            let y = top_y + ((line_height - title_box) / 2.).max(px(0.));
+            let _ = title.paint(point(x, y), title_box, TextAlign::Left, None, window, cx);
+            let hint = window.text_system().shape_line(
+                DRAFT_HINT.into(),
+                *body_size,
+                &[run(DRAFT_HINT.len(), body_font.clone())],
+                None,
+            );
+            let hint_box = hint.ascent + hint.descent;
+            let _ = hint.paint(point(text_x, top_y + line_height + px(14.)), hint_box, TextAlign::Left, None, window, cx);
+        }
+
         if let Some(caret) = self.caret {
             let row = shaped.row_of(caret);
             let x = shaped.x_of(caret, row);
-            let base = top_y + laid.rows[row].y + shaped.baseline(row);
-            let (asc, desc) = (shaped.ascent, shaped.descent);
+            let r = laid.rows[row];
+            let base = top_y + r.y + shaped.baseline(row);
+            let (font, font_size) = caret_font(&d, caret, self.body_size);
+            let font_id = ts.resolve_font(&font);
+            let asc = ts.ascent(font_id, font_size);
+            let desc = ts.descent(font_id, font_size).abs();
+            let (y, h) = caret_box(f32::from(base), f32::from(asc), f32::from(desc), f32::from(top_y + r.y), f32::from(r.height));
             window.paint_quad(fill(
-                Bounds::new(point(text_x + x - px(0.5), base - asc), size(px(1.5), asc + desc)),
+                Bounds::new(point(text_x + x - px(0.5), px(y)), size(px(1.5), px(h))),
                 c.accent,
             ));
         }
@@ -749,5 +855,30 @@ impl Element for BlockEl {
             bounds,
             text: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[core::prelude::v1::test]
+    fn the_caret_stands_on_the_baseline_inside_its_row() {
+        // A 27 pt body row: font height, on the baseline.
+        assert_eq!(caret_box(23., 15.2, 3.9, 0., 27.), (7., 20.));
+        // Pushed back inside when the font would stick out above or below.
+        assert_eq!(caret_box(10., 15., 4., 0., 27.), (0., 19.));
+        assert_eq!(caret_box(26., 15., 4., 0., 27.), (8., 19.));
+        // As tall as the row: the row.
+        assert_eq!(caret_box(20., 20., 8., 3., 27.), (3., 27.));
+    }
+
+    #[core::prelude::v1::test]
+    fn a_shift_pushes_past_the_viewport_edge_by_itself() {
+        let view = Bounds::new(point(px(0.), px(100.)), size(px(10.), px(500.)));
+        let down = shifting_rect(view, px(8.));
+        assert_eq!(view.top() - down.top(), px(8.));
+        let up = shifting_rect(view, px(-8.));
+        assert_eq!(up.bottom() - view.bottom(), px(8.));
     }
 }

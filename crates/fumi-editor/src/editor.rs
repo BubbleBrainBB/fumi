@@ -11,9 +11,14 @@ use crate::element::*;
 use fumi_core::markdown::*;
 use crate::media::{self, Lookup, MediaContext, MediaKind, MediaLookup};
 use crate::metrics;
+use crate::outline::{self, OutlineHeading, RailState};
 use crate::paste;
+use crate::popover::{self, CreateOffer, OfferCancel, OfferCreate};
+use crate::slash::{self, SlashAccept, SlashClose, SlashDown, SlashMenu, SlashUp};
+use crate::words;
 use crate::video::{self, Control, VideoPlayer, VideoUi};
 use fumi_core::attachment_import;
+use fumi_core::wiki_link::WikiLink;
 use gpui::prelude::*;
 use gpui::*;
 use std::cell::RefCell;
@@ -21,6 +26,7 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
+use std::cell::Cell;
 use unicode_segmentation::UnicodeSegmentation;
 
 actions!(
@@ -30,6 +36,8 @@ actions!(
         SelectDown, WordLeft, WordRight, SelectWordLeft, SelectWordRight, LineStart, LineEnd,
         SelectLineStart, SelectLineEnd, DocStart, DocEnd, SelectDocStart, SelectDocEnd, PageUp,
         PageDown, SelectAll, Copy, Cut, Paste, Undo, Redo, Save, CharacterPalette, Quit, Bold, Italic, InsertLink, ToggleTaskLine,
+        ParagraphStart, ParagraphEnd, ScrollToStart, ScrollToEnd, DeleteWordLeft, DeleteWordRight, DeleteToRowStart,
+        DeleteToParagraphEnd,
     ]
 );
 
@@ -55,8 +63,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-shift-right", SelectWordRight, c),
         KeyBinding::new("cmd-left", LineStart, c),
         KeyBinding::new("cmd-right", LineEnd, c),
-        KeyBinding::new("ctrl-a", LineStart, c),
-        KeyBinding::new("ctrl-e", LineEnd, c),
+        KeyBinding::new("ctrl-a", ParagraphStart, c),
+        KeyBinding::new("ctrl-e", ParagraphEnd, c),
         KeyBinding::new("cmd-shift-left", SelectLineStart, c),
         KeyBinding::new("cmd-shift-right", SelectLineEnd, c),
         KeyBinding::new("cmd-up", DocStart, c),
@@ -78,9 +86,37 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-l", ToggleTaskLine, c),
         KeyBinding::new("ctrl-cmd-space", CharacterPalette, c),
         KeyBinding::new("cmd-q", Quit, None),
+        // What NSTextView has on these keys.
+        KeyBinding::new("home", ScrollToStart, c),
+        KeyBinding::new("end", ScrollToEnd, c),
+        KeyBinding::new("alt-backspace", DeleteWordLeft, c),
+        KeyBinding::new("alt-delete", DeleteWordRight, c),
+        KeyBinding::new("cmd-backspace", DeleteToRowStart, c),
+        KeyBinding::new("ctrl-k", DeleteToParagraphEnd, c),
+        KeyBinding::new("ctrl-h", Backspace, c),
+        KeyBinding::new("ctrl-d", Delete, c),
+        KeyBinding::new("ctrl-b", Left, c),
+        KeyBinding::new("ctrl-f", Right, c),
+        KeyBinding::new("ctrl-p", Up, c),
+        KeyBinding::new("ctrl-n", Down, c),
+        // Bound last, so they come before the plain keys while the menu's open. A
+        // key the menu has no use for just goes on to the plain binding.
+        KeyBinding::new("up", SlashUp, Some("Editor && slash_menu")),
+        KeyBinding::new("ctrl-p", SlashUp, Some("Editor && slash_menu")),
+        KeyBinding::new("down", SlashDown, Some("Editor && slash_menu")),
+        KeyBinding::new("ctrl-n", SlashDown, Some("Editor && slash_menu")),
+        KeyBinding::new("enter", SlashAccept, Some("Editor && slash_menu")),
+        KeyBinding::new("tab", SlashAccept, Some("Editor && slash_menu")),
+        KeyBinding::new("escape", SlashClose, Some("Editor && slash_menu")),
+        // The offer to create a linked note holds the focus while it's up.
+        KeyBinding::new("escape", OfferCancel, Some("CreateNoteOffer")),
+        KeyBinding::new("enter", OfferCreate, Some("CreateNoteOffer")),
     ]);
 }
 
+/// The note's first and last items carry this much room themselves. As list
+/// padding it would hold all text 30 pt below the page's top at every scroll
+/// position, rather than just at the top of the note.
 const TOP_PAD: f32 = 30.;
 const BOTTOM_PAD: f32 = 30.;
 const MIN_SIDE_INSET: f32 = 40.;
@@ -128,7 +164,22 @@ pub struct Editor {
     redo: Vec<Op>,
     can_coalesce: bool,
     revealed: Option<Range<usize>>,
+    /// The line drawn with its syntax showing, and the offset that shows it. They
+    /// stay put while a selection is made or a press is held, as only a caret
+    /// settling somewhere restyles anything.
     caret_line: usize,
+    reveal_head: usize,
+    /// A press is held: where the caret landed shows once it lets go.
+    hold_reveal: bool,
+    /// The line the head is on, as of this frame.
+    head_line: usize,
+    /// This move is the caret going somewhere by itself: its line keeps its height
+    /// in the viewport through the restyle.
+    keep_wanted: bool,
+    /// A line and where its caret row must stand, once layout has run: next
+    /// frame's, and this frame's.
+    keep_next: Option<(usize, Pixels)>,
+    keep_now: Option<(usize, Pixels)>,
     pub painted: Rc<RefCell<Vec<Painted>>>,
     pub blocks: BlockCache,
     selecting: bool,
@@ -141,8 +192,8 @@ pub struct Editor {
     margin: Pixels,
     /// `FUMI_BLUR`: leave the page translucent over the window's blur.
     see_through: bool,
-    autoscroll_caret: bool,
-    last_shown: usize,
+    /// The line whose element should bring the head into view.
+    autoscroll_line: Option<usize>,
     restore_hints: bool,
     pub show_status: bool,
     pub load_error: Option<String>,
@@ -159,7 +210,8 @@ pub struct Editor {
     scrolled_at: Option<Instant>,
     last_scroll_top: (usize, f32),
     thumb_hover: bool,
-    thumb_drag: Option<f32>,
+    /// While the thumb's held: how far down it the pointer took it.
+    thumb_drag: Option<Pixels>,
     /// False when the doc was replaced from outside and has no unsaved change.
     pub dirty: bool,
     /// The library this note is in: where relative paths and `![[embeds]]` are
@@ -174,6 +226,21 @@ pub struct Editor {
     over_video: bool,
     /// The moment the timer for the next animated-image frame is set for.
     frame_timer: Rc<std::cell::Cell<Option<Instant>>>,
+    /// The slash menu, while it's open.
+    pub(crate) slash: Option<SlashMenu>,
+    /// An input method is mid-edit: the query waits until the edit's done.
+    slash_hold: bool,
+    /// Where its slash is drawn, as of this frame's layout.
+    pub(crate) slash_box: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The headings, as of when typing last paused.
+    pub outline: Rc<Vec<OutlineHeading>>,
+    pub(crate) outline_epoch: u64,
+    pub(crate) rail: RailState,
+    pub pane_height: Option<Pixels>,
+    pub(crate) offer: Option<CreateOffer>,
+    pub(crate) offer_focus: FocusHandle,
+    /// A draft's faint title and hint show while it's untouched.
+    pub draft_placeholder: bool,
 }
 
 /// A press on one of a video's sliders, until it lets go.
@@ -204,6 +271,8 @@ pub enum EditorEvent {
     OpenWiki { inner: String, new_tab: bool, anchor: Bounds<Pixels> },
     /// The caret or selection moved.
     SelectionChanged,
+    /// A link to a note that doesn't exist, which the user chose to create.
+    CreateNote { name: String, new_tab: bool },
 }
 
 impl EventEmitter<EditorEvent> for Editor {}
@@ -249,6 +318,12 @@ impl Editor {
             can_coalesce: false,
             revealed: None,
             caret_line: 0,
+            reveal_head: 0,
+            hold_reveal: false,
+            head_line: 0,
+            keep_wanted: false,
+            keep_next: None,
+            keep_now: None,
             painted: Rc::new(RefCell::new(Vec::new())),
             blocks: BlockCache::default(),
             selecting: false,
@@ -260,8 +335,7 @@ impl Editor {
             list_width: px(720.),
             margin: px(0.),
             see_through: std::env::var("FUMI_BLUR").is_ok(),
-            autoscroll_caret: false,
-            last_shown: 0,
+            autoscroll_line: None,
             restore_hints: false,
             show_status: false,
             load_error: None,
@@ -287,6 +361,16 @@ impl Editor {
             video_drag: None,
             over_video: false,
             frame_timer: Rc::default(),
+            slash: None,
+            slash_hold: false,
+            slash_box: Rc::default(),
+            outline: Rc::default(),
+            outline_epoch: 0,
+            rail: RailState::default(),
+            pane_height: None,
+            offer: None,
+            offer_focus: cx.focus_handle(),
+            draft_placeholder: false,
         };
         let weak = cx.weak_entity();
         media::with_store(|s| s.add_listener(weak));
@@ -323,6 +407,7 @@ impl Editor {
                 self.lines = scan_all(text);
                 let t2 = Instant::now();
                 metrics::note_load(t1 - t0, t2 - t1);
+                self.outline = Rc::new(outline::outline(text));
                 self.load_error = None;
             }
             Err(e) => {
@@ -330,6 +415,7 @@ impl Editor {
                 self.doc = Doc::from_bytes(b"").unwrap();
                 self.lines = scan_all("");
                 self.path = None;
+                self.outline = Rc::default();
                 self.load_error = Some(format!("Not UTF-8, not opened: {e}"));
             }
         }
@@ -339,6 +425,8 @@ impl Editor {
         self.undo.clear();
         self.redo.clear();
         self.caret_line = 0;
+        self.reveal_head = 0;
+        self.slash = None;
         self.videos.borrow_mut().players.clear();
         self.media_wait.clear();
         self.video_drag = None;
@@ -498,6 +586,11 @@ impl Editor {
                 self.list.splice(prefix..old_end, new_end - prefix);
             }
         }
+        // The last item has the page's foot in it, and a new one takes it over.
+        if self.items.len() != new.len() && new.len() >= 2 {
+            let at = new.len().min(self.items.len()) - 1;
+            self.list.remeasure_items(at..(at + 2).min(new.len()));
+        }
         self.items = new;
         self.title_line = find_title(&self.lines);
     }
@@ -519,13 +612,34 @@ impl Editor {
     }
 
     /// After the caret moved: fold what it left, unfold what it entered, and
-    /// have the two lines whose syntax changed visibility measured again.
-    fn caret_moved(&mut self, scroll: bool) {
+    /// have the two lines whose syntax changed visibility measured again. Making a
+    /// selection changes none of that; nor does a press, until it lets go.
+    pub(crate) fn caret_moved(&mut self, scroll: bool) {
         metrics::note_change();
+        self.caret_on = true;
+        self.blink_epoch = 1;
+        let keep_wanted = std::mem::take(&mut self.keep_wanted);
+        if !self.slash_hold {
+            self.refresh_slash();
+        }
         let line = self.doc.line_of(self.head);
+        if !self.selection_is_empty() || self.hold_reveal {
+            if scroll {
+                self.reveal(line);
+            }
+            return;
+        }
         let prev = self.caret_line;
-        self.close_revealed_players(line);
         let block = self.foldable_block_at(line);
+        if line != prev || block != self.revealed {
+            self.clear_link_hover();
+            // Before anything moves: where the line it landed on stands now.
+            if keep_wanted {
+                self.keep_next = self.row_top_of(self.head).map(|y| (line, y));
+            }
+        }
+        self.reveal_head = self.head;
+        self.close_revealed_players(line);
         if block != self.revealed {
             self.revealed = block;
             self.rebuild_items();
@@ -541,8 +655,28 @@ impl Editor {
         // Inline syntax shows only on the span the caret touches, so even a
         // move within the line can change its layout.
         self.remeasure_lines(line..line + 1);
-        self.caret_on = true;
-        self.blink_epoch = 1;
+    }
+
+    /// The window height of the row holding `at`, if it's on the page now.
+    fn row_top_of(&self, at: usize) -> Option<Pixels> {
+        let line = self.doc.line_of(at);
+        let painted = self.painted.borrow();
+        let item = painted.iter().find(|i| line >= i.first_line && line < i.first_line + i.n_lines)?;
+        let y = match &item.text {
+            Some((d, s)) => {
+                let start = self.doc.line_start(line);
+                let row = s.row_of(d.src_to_disp(at.saturating_sub(start)));
+                item.bounds.top() + d.top + s.laid.rows[row].y
+            }
+            None => item.bounds.top(),
+        };
+        let view = self.list.viewport_bounds();
+        (y >= view.top() && y <= view.bottom()).then_some(y)
+    }
+
+    fn clear_link_hover(&mut self) {
+        self.hovered_link = None;
+        self.hovered_web = None;
     }
 
     /// Brings the caret's item into view. `ListState::scroll_to_reveal_item`
@@ -550,7 +684,8 @@ impl Editor {
     /// items between here and there were never laid out, so this only trusts
     /// measured neighbours and otherwise jumps by item index.
     fn reveal(&mut self, line: usize) {
-        self.autoscroll_caret = true;
+        // Inside a folded block there's no line element to do it.
+        self.autoscroll_line = (self.items.get(self.item_of(line)).is_some_and(|i| i.kind == ItemKind::Line)).then_some(line);
         // On screen already: the element itself asks for any small correction
         // during layout, in the same frame.
         let visible = self
@@ -573,7 +708,7 @@ impl Editor {
             ix.checked_sub(k)
                 .filter(|i| *i >= top)
                 .and_then(|i| self.list.bounds_for_item(i))
-                .map(|b| b.bottom() + px(TOP_PAD) + px(30.) * k as f32)
+                .map(|b| b.bottom() + px(30.) * k as f32)
         });
         match probe {
             Some(bottom) if bottom - view.bottom() < view.size.height * 2. => {
@@ -609,6 +744,8 @@ impl Editor {
         self.head = caret;
         self.goal_x = None;
         self.marked = None;
+        self.hold_reveal = false;
+        self.clear_link_hover();
 
         let sel_after = (caret, caret);
         let coalesce = self.can_coalesce
@@ -661,6 +798,7 @@ impl Editor {
                 .update(cx, |e, cx| {
                     let live = e.edit_epoch == epoch;
                     if live {
+                        e.refresh_outline(cx);
                         cx.emit(EditorEvent::ContentSettled);
                     }
                     live
@@ -749,10 +887,17 @@ impl Editor {
             }
         };
         let (anchor, head) = (map(self.anchor), map(self.head));
+        self.close_slash();
+        // The caret's line stays where it is in the window.
+        let keep = self.row_top_of(self.head);
         self.apply(prefix, old_end - prefix, &text[prefix..new_end], (anchor, head));
+        if self.selection_is_empty() {
+            self.keep_next = keep.map(|y| (self.doc.line_of(self.head), y));
+        }
         self.undo.clear();
         self.redo.clear();
         self.dirty = false;
+        self.refresh_outline(cx);
         cx.notify();
     }
 
@@ -787,10 +932,11 @@ impl Editor {
         }
     }
 
+    /// Puts the note back where it was left, before anything is drawn.
     pub fn restore_view(&mut self, state: ViewState) {
         let n = self.doc.len();
-        self.anchor = state.anchor.min(n);
-        self.head = state.head.min(n);
+        self.anchor = self.doc.floor_boundary(state.anchor.min(n));
+        self.head = self.doc.floor_boundary(state.head.min(n));
         self.caret_moved(false);
         self.list.scroll_to(ListOffset {
             item_ix: state.scroll_item,
@@ -798,15 +944,45 @@ impl Editor {
         });
     }
 
+    /// The tab showing this note was left: what floats over the page goes with it.
+    pub fn left_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_slash();
+        self.clear_link_hover();
+        self.rail.close();
+        if self.offer.take().is_some() {
+            window.focus(&self.focus, cx);
+        }
+        self.selecting = false;
+        self.hold_reveal = false;
+    }
+
+    /// A draft takes focus with the caret at its end.
+    pub fn caret_to_end(&mut self) {
+        let end = self.doc.len();
+        self.anchor = end;
+        self.head = end;
+        self.caret_moved(false);
+    }
+
     pub fn text(&self) -> String {
         self.doc.rope.to_string()
     }
 
-    /// Scrolls a heading's line to the top with a little margin.
+    /// Scrolls a line to the top, with 12 pt above it, wherever that takes the
+    /// list: to the item now, to the exact height once its neighbours are measured.
     pub fn scroll_to_line(&mut self, line: usize, cx: &mut Context<Self>) {
         let ix = self.item_of(line);
-        self.list.scroll_to(ListOffset { item_ix: ix, offset_in_item: px(-12.) });
+        self.list.scroll_to(ListOffset { item_ix: ix, offset_in_item: px(0.) });
+        let view = self.list.viewport_bounds();
+        self.keep_next = Some((line, view.top() + px(12.)));
         cx.notify();
+    }
+
+    /// Opened at `[[Note#Heading]]`: to that heading, whatever its case.
+    pub fn scroll_to_heading_named(&mut self, name: &str, cx: &mut Context<Self>) {
+        if let Some(line) = outline::find_heading(&self.doc.rope.to_string(), name) {
+            self.scroll_to_line(line, cx);
+        }
     }
 
     fn apply(&mut self, at: usize, old_len: usize, text: &str, sel: (usize, usize)) {
@@ -820,6 +996,8 @@ impl Editor {
         self.anchor = sel.0;
         self.head = sel.1;
         self.marked = None;
+        self.caret_line = self.caret_line.min(self.lines.len().saturating_sub(1));
+        self.reveal_head = self.reveal_head.min(self.doc.len());
         if changed {
             self.revealed = self.foldable_block_at(self.doc.line_of(self.head));
             self.rebuild_items();
@@ -920,29 +1098,32 @@ impl Editor {
                 .unwrap_or(text.len())
     }
 
+    /// Option-arrow: to the end of the next word or the start of the last one,
+    /// past lines with none, as the system's tokenizer sees words.
     fn word_boundary(&self, at: usize, forward: bool) -> usize {
-        let line = self.doc.line_of(at);
-        let start = self.doc.line_start(line);
-        let text = self.doc.line_text(line);
-        let off = at - start;
-        let words: Vec<(usize, &str)> = text.split_word_bound_indices().collect();
-        if forward {
-            if off >= text.len() {
-                return self.next_boundary(at);
+        let mut line = self.doc.line_of(at);
+        let mut off = at - self.doc.line_start(line);
+        loop {
+            let found = {
+                let tokens = words::words(&self.doc.line_text(line));
+                if forward { words::end_after(&tokens, off) } else { words::start_before(&tokens, off) }
+            };
+            if let Some(found) = found {
+                return self.doc.line_start(line) + found;
             }
-            words
-                .iter()
-                .find(|(i, w)| i + w.len() > off && w.chars().any(char::is_alphanumeric))
-                .map_or(start + text.len(), |(i, w)| start + i + w.len())
-        } else {
-            if off == 0 {
-                return self.prev_boundary(at);
+            if forward {
+                if line + 1 >= self.doc.line_count() {
+                    return self.doc.len();
+                }
+                line += 1;
+                off = 0;
+            } else {
+                if line == 0 {
+                    return 0;
+                }
+                line -= 1;
+                off = usize::MAX;
             }
-            words
-                .iter()
-                .rev()
-                .find(|(i, w)| *i < off && w.chars().any(char::is_alphanumeric))
-                .map_or(start, |(i, _)| start + i)
         }
     }
 
@@ -982,7 +1163,13 @@ impl Editor {
         }
         self.can_coalesce = false;
         self.marked = None;
+        self.keep_wanted = true;
         self.caret_moved(true);
+    }
+
+    /// What of `line` shows as source: the caret's offset, if it's the caret's.
+    fn reveal_offset(&self, line: usize) -> Option<usize> {
+        (line == self.caret_line).then(|| self.reveal_head.saturating_sub(self.doc.line_start(line)))
     }
 
     fn shape_line(&self, line: usize, caret: Option<usize>, window: &Window) -> (Rc<DisplayLine>, Rc<Shaped>) {
@@ -1000,7 +1187,7 @@ impl Editor {
         }
         let line = self.doc.line_of(self.head);
         let start = self.doc.line_start(line);
-        let (d, s) = self.shape_line(line, Some(self.head - start), window);
+        let (d, s) = self.shape_line(line, self.reveal_offset(line), window);
         let disp = d.src_to_disp(self.head - start);
         let row = s.row_of(disp);
         let x = self.goal_x.unwrap_or(d.indent + s.x_of(disp, row));
@@ -1028,7 +1215,7 @@ impl Editor {
                 // A folded block opens on the near line, source visible.
                 self.doc.line_start(next)
             } else {
-                let (nd, ns) = self.shape_line(next, None, window);
+                let (nd, ns) = self.shape_line(next, self.reveal_offset(next), window);
                 let r = if down { 0 } else { ns.row_count() - 1 };
                 self.doc.line_start(next) + nd.disp_to_src(ns.index_at(r, x - nd.indent))
             }
@@ -1036,15 +1223,46 @@ impl Editor {
         self.set_head(target, extend, true);
     }
 
-    fn page(&mut self, down: bool, window: &mut Window) {
-        let h = window.viewport_size().height * 0.85;
+    /// Page Up and Down scroll and leave the caret, as NSTextView's do.
+    fn page(&mut self, down: bool, _: &mut Window) {
+        let h = self.list.viewport_bounds().size.height - px(10.);
         let delta = if down { h } else { -h };
         self.list.scroll_by(delta);
     }
 
-    fn line_edge(&self, end: bool) -> usize {
+    fn paragraph_edge(&self, end: bool) -> usize {
         let line = self.doc.line_of(self.head);
         if end { self.doc.line_end(line) } else { self.doc.line_start(line) }
+    }
+
+    /// ⌘← and ⌘→: the ends of the row the caret is on, on a wrapped line too.
+    fn row_edge(&self, end: bool, window: &Window) -> usize {
+        let line = self.doc.line_of(self.head);
+        let start = self.doc.line_start(line);
+        let (d, s) = self.shape_line(line, self.reveal_offset(line), window);
+        let row = s.row_of(d.src_to_disp(self.head - start));
+        let r = s.laid.rows[row];
+        let disp = if !end {
+            r.start
+        } else if row + 1 == s.laid.rows.len() {
+            r.end
+        } else {
+            // Its end is the next row's start, so stop before the last character.
+            s.laid.last_index_before(r.end).max(r.start)
+        };
+        start + d.disp_to_src(disp)
+    }
+
+    fn delete_to(&mut self, to: usize, cx: &mut Context<Self>) {
+        if !self.selection_is_empty() {
+            self.replace_selection("", false, cx);
+            return;
+        }
+        let range = self.head.min(to)..self.head.max(to);
+        if !range.is_empty() {
+            self.edit(range, "", false, false);
+            self.schedule_after_edit(cx);
+        }
     }
 
     fn register_actions(&self, el: Stateful<Div>, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -1070,7 +1288,11 @@ impl Editor {
             .on_action(cx.listener(|this, _: &Italic, _, cx| this.wrap_selection("*", "*", cx)))
             .on_action(cx.listener(|this, _: &InsertLink, _, cx| this.wrap_selection("[", "](url)", cx)))
             .on_action(cx.listener(|this, _: &ToggleTaskLine, _, cx| this.toggle_task_on_caret_line(cx)))
-            .on_action(cx.listener(|_, _: &CharacterPalette, window, _| window.show_character_palette()));
+            .on_action(cx.listener(|_, _: &CharacterPalette, window, _| window.show_character_palette()))
+            .on_action(cx.listener(Self::slash_up))
+            .on_action(cx.listener(Self::slash_down))
+            .on_action(cx.listener(Self::slash_accept))
+            .on_action(cx.listener(Self::slash_close));
         let el = act!(el, Left, |this, _w| {
             let to = if this.selection_is_empty() { this.prev_boundary(this.head) } else { this.selection().start };
             this.set_head(to, false, false)
@@ -1089,10 +1311,36 @@ impl Editor {
         let el = act!(el, WordRight, |this, _w| this.set_head(this.word_boundary(this.head, true), false, false));
         let el = act!(el, SelectWordLeft, |this, _w| this.set_head(this.word_boundary(this.head, false), true, false));
         let el = act!(el, SelectWordRight, |this, _w| this.set_head(this.word_boundary(this.head, true), true, false));
-        let el = act!(el, LineStart, |this, _w| this.set_head(this.line_edge(false), false, false));
-        let el = act!(el, LineEnd, |this, _w| this.set_head(this.line_edge(true), false, false));
-        let el = act!(el, SelectLineStart, |this, _w| this.set_head(this.line_edge(false), true, false));
-        let el = act!(el, SelectLineEnd, |this, _w| this.set_head(this.line_edge(true), true, false));
+        let el = act!(el, LineStart, |this, w| this.set_head(this.row_edge(false, w), false, false));
+        let el = act!(el, LineEnd, |this, w| this.set_head(this.row_edge(true, w), false, false));
+        let el = act!(el, SelectLineStart, |this, w| this.set_head(this.row_edge(false, w), true, false));
+        let el = act!(el, SelectLineEnd, |this, w| this.set_head(this.row_edge(true, w), true, false));
+        let el = act!(el, ParagraphStart, |this, _w| this.set_head(this.paragraph_edge(false), false, false));
+        let el = act!(el, ParagraphEnd, |this, _w| this.set_head(this.paragraph_edge(true), false, false));
+        let el = act!(el, ScrollToStart, |this, _w| this.list.scroll_to(ListOffset { item_ix: 0, offset_in_item: px(0.) }));
+        let el = act!(el, ScrollToEnd, |this, _w| this.list.scroll_to(ListOffset { item_ix: this.items.len(), offset_in_item: px(0.) }));
+        let el = el
+            .on_action(cx.listener(|this, _: &DeleteWordLeft, _, cx| {
+                let to = this.word_boundary(this.head, false);
+                this.delete_to(to, cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &DeleteWordRight, _, cx| {
+                let to = this.word_boundary(this.head, true);
+                this.delete_to(to, cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &DeleteToRowStart, window, cx| {
+                let to = this.row_edge(false, window);
+                this.delete_to(to, cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &DeleteToParagraphEnd, _, cx| {
+                let end = this.paragraph_edge(true);
+                let to = if end == this.head { this.next_boundary(end) } else { end };
+                this.delete_to(to, cx);
+                cx.notify();
+            }));
         let el = act!(el, DocStart, |this, _w| this.set_head(0, false, false));
         let el = act!(el, DocEnd, |this, _w| this.set_head(this.doc.len(), false, false));
         let el = act!(el, SelectDocStart, |this, _w| this.set_head(0, true, false));
@@ -1160,7 +1408,7 @@ impl Editor {
     }
 
     /// Links files now in the library, each on a line of its own.
-    fn insert_imported(&mut self, imported: &[PathBuf], range: Range<usize>, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn insert_imported(&mut self, imported: &[PathBuf], range: Range<usize>, cx: &mut Context<Self>) -> bool {
         let Some(library) = &self.library else { return false };
         if imported.is_empty() {
             return false;
@@ -1296,7 +1544,11 @@ impl Editor {
     }
 
     fn mouse_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_slash();
         window.focus(&self.focus, cx);
+        if self.press_scroller(e.position, cx) {
+            return;
+        }
         if let Some(line) = self.task_at(e.position) {
             self.toggle_task(line);
             self.schedule_after_edit(cx);
@@ -1332,6 +1584,7 @@ impl Editor {
                 // Not selected: the caret goes to the end of its source, which
                 // shows the source above it.
                 MediaHit::Image { caret } if e.click_count == 1 && !e.modifiers.shift => {
+                    self.keep_wanted = true;
                     self.set_head_from_mouse(caret, false);
                     cx.notify();
                     return;
@@ -1351,11 +1604,7 @@ impl Editor {
                 let start = self.doc.line_start(line);
                 let text = self.doc.line_text(line);
                 let off = at - start;
-                let word = text
-                    .split_word_bound_indices()
-                    .find(|(i, w)| off >= *i && off < i + w.len())
-                    .map(|(i, w)| start + i..start + i + w.len())
-                    .unwrap_or(at..at);
+                let word = words::selection_at(&text, off).map_or(at..at, |w| start + w.start..start + w.end);
                 self.anchor = word.start;
                 self.set_head_from_mouse(word.end, true);
             }
@@ -1367,6 +1616,7 @@ impl Editor {
                 self.selecting = true;
                 self.press_at = e.position;
                 self.dragged = false;
+                self.hold_reveal = true;
                 self.set_head_from_mouse(at, e.modifiers.shift);
             }
         }
@@ -1392,6 +1642,7 @@ impl Editor {
                 self.selecting = true;
                 self.press_at = at;
                 self.dragged = true;
+                self.hold_reveal = true;
                 self.set_head_from_mouse(head, false);
             } else {
                 return;
@@ -1409,25 +1660,48 @@ impl Editor {
                 self.hovered_web = web;
                 cx.notify();
             }
-        }
-        if self.selecting && e.pressed_button == Some(MouseButton::Left) {
-            // A click can open a block and move text under a still pointer; a
-            // little hand tremor mustn't turn that into a selection.
-            let moved = e.position - self.press_at;
-            if !self.dragged && f32::from(moved.x).abs() < 4. && f32::from(moved.y).abs() < 4. {
-                return;
-            }
-            self.dragged = true;
-            let at = self.hit_test(e.position);
-            if at != self.head {
-                self.set_head_from_mouse(at, true);
-                cx.notify();
-            }
+            self.track_scroller(e.position, cx);
         }
     }
 
-    fn mouse_up(&mut self, e: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+    /// The pointer moving with the button down, wherever it is by now: this runs
+    /// for as long as a press is held on the scroller or in the text.
+    fn drag_move(&mut self, p: Point<Pixels>, cx: &mut Context<Self>) {
+        if self.thumb_drag.is_some() {
+            self.drag_scroller(p, cx);
+            return;
+        }
+        if !self.selecting {
+            return;
+        }
+        let moved = p - self.press_at;
+        if !self.dragged && f32::from(moved.x).abs() < 4. && f32::from(moved.y).abs() < 4. {
+            return;
+        }
+        self.dragged = true;
+        let at = self.hit_test(p);
+        if at != self.head {
+            self.set_head_from_mouse(at, true);
+            cx.notify();
+        }
+    }
+
+    /// A press lets go: the caret, if that's what it left, shows where it landed.
+    fn release(&mut self, cx: &mut Context<Self>) {
         self.selecting = false;
+        if self.thumb_drag.take().is_some() {
+            self.list.scrollbar_drag_ended();
+            cx.notify();
+        }
+        if std::mem::take(&mut self.hold_reveal) {
+            self.keep_wanted = true;
+            self.caret_moved(false);
+            cx.notify();
+        }
+    }
+
+    fn mouse_up(&mut self, e: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.release(cx);
         if self.video_drag.is_some() {
             self.drag_video(e.position, true);
             self.video_drag = None;
@@ -1439,12 +1713,22 @@ impl Editor {
                     cx.open_url(&address);
                     cx.emit(EditorEvent::OpenedWeb(address));
                 }
-                Link::Wiki(inner) => cx.emit(EditorEvent::OpenWiki {
-                    inner,
-                    new_tab: pending.new_tab,
-                    anchor: pending.anchor,
-                }),
+                Link::Wiki(inner) => self.open_wiki(inner, pending.new_tab, pending.anchor, window, cx),
             }
+        }
+    }
+
+    /// A clicked `[[link]]`: its note opens, or, if there's none, there's an offer
+    /// to create it.
+    fn open_wiki(&mut self, inner: String, new_tab: bool, anchor: Bounds<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        self.clear_link_hover();
+        let missing = self.links.as_ref().and_then(|links| {
+            let link = WikiLink::parse(&inner)?;
+            links.index.resolve(&link.target, links.folder.as_deref()).is_none().then_some(link.target)
+        });
+        match missing {
+            Some(target) => self.offer_create(CreateOffer { name: popover::name_of_target(&target), new_tab, anchor }, window, cx),
+            None => cx.emit(EditorEvent::OpenWiki { inner, new_tab, anchor }),
         }
     }
 
@@ -1533,8 +1817,10 @@ impl Editor {
     /// Typesets the line's inline math and hands the result to its spans.
     fn fill_math(&mut self, d: &mut DisplayLine, window: &Window) {
         let size = f32::from(d.font_size);
+        let display_size = self.typo.size + 2.;
         for span in &mut d.spans {
             if let Some(math) = &mut span.math {
+                let size = if math.display { display_size } else { size };
                 math.rendered = blocks::inline_math(&math.latex, size, &mut self.blocks, window);
             }
         }
@@ -1546,16 +1832,33 @@ impl Editor {
         };
         let line = item.start as usize;
         if item.kind == ItemKind::Line {
-            let reveal = line == self.caret_line;
-            let autoscroll = reveal && std::mem::take(&mut self.autoscroll_caret);
             let start = self.doc.line_start(line);
-            let caret_at = reveal.then(|| self.head.saturating_sub(start));
+            let caret_at = self.reveal_offset(line);
             let mut built = self.display_of(line, caret_at);
+            // The room at the page's two ends.
+            if ix == 0 {
+                built.top += px(TOP_PAD);
+            }
+            if ix + 1 == self.items.len() {
+                built.bottom += px(BOTTOM_PAD);
+            }
             self.fill_math(&mut built, window);
             let display = Rc::new(built);
             let src_len = display.src_len;
-            let display_head = if reveal { display.src_to_disp(self.head - start) } else { 0 };
-            let caret = (self.selection_is_empty() && self.caret_on && reveal).then_some(display_head);
+            let head_here = line == self.head_line;
+            let display_head = if head_here { display.src_to_disp(self.head - start) } else { 0 };
+            let caret = (self.selection_is_empty() && self.caret_on && head_here).then_some(display_head);
+            let autoscroll = head_here && self.autoscroll_line == Some(line) && self.autoscroll_line.take().is_some();
+            let keep_at = self
+                .keep_now
+                .filter(|(kept, _)| *kept == line)
+                .map(|(_, y)| (y, self.list.viewport_bounds()));
+            let slash = self.slash.as_ref().and_then(|menu| {
+                (menu.anchor >= start && menu.anchor <= start + src_len)
+                    .then(|| (display.src_to_disp(menu.anchor - start), self.slash_box.clone()))
+            });
+            let placeholder = (line == 0 && self.draft_placeholder && self.is_untouched_draft())
+                .then(|| (self.typo.body(), px(self.typo.size)));
             let sel = self.selection();
             let selection = (!sel.is_empty()
                 && sel.start <= start + src_len
@@ -1580,7 +1883,7 @@ impl Editor {
                 line,
                 display,
                 caret,
-                caret_head: if reveal { Some(display_head) } else { None },
+                caret_head: head_here.then_some(display_head),
                 autoscroll,
                 selection,
                 hovered,
@@ -1588,6 +1891,10 @@ impl Editor {
                 shaped: Rc::new(RefCell::new(None)),
                 symbols: self.symbols.clone(),
                 videos: self.videos.clone(),
+                body_size: px(self.typo.size),
+                keep_at,
+                slash,
+                placeholder,
             };
             return element.into_any_element();
         }
@@ -1603,13 +1910,24 @@ impl Editor {
         let sel = self.selection();
         let start = self.doc.line_start(range.start);
         BlockEl {
-            child: div().w_full().px(self.margin).child(body).into_any_element(),
+            child: div()
+                .w_full()
+                .px(self.margin)
+                .when(ix == 0, |d| d.pt(px(TOP_PAD)))
+                .when(ix + 1 == self.items.len(), |d| d.pb(px(BOTTOM_PAD)))
+                .child(body)
+                .into_any_element(),
             first_line: range.start,
             n_lines: range.len(),
             selected: !sel.is_empty() && sel.start <= start && sel.end >= start + src.len(),
             painted: self.painted.clone(),
         }
         .into_any_element()
+    }
+
+    fn is_untouched_draft(&self) -> bool {
+        let draft = fumi_core::note_store::DRAFT_CONTENT;
+        self.doc.len() == draft.len() && self.doc.slice(0..draft.len()) == draft
     }
 
     fn status_text(&self) -> String {
@@ -1653,8 +1971,14 @@ impl Render for Editor {
             ui.live.set(false);
             ui.next_frame.set(None);
         }
-        self.last_shown = self.painted.borrow().len();
         self.painted.borrow_mut().clear();
+        self.keep_now = self.keep_next.take();
+        self.head_line = self.doc.line_of(self.head);
+        self.slash_box.set(None);
+        // Losing focus closes the menu.
+        if self.slash.is_some() && !self.focus.is_focused(window) {
+            self.close_slash();
+        }
         let vw = self.pane_width.unwrap_or(window.viewport_size().width);
         let cap = px(column_cap(&self.column_setting));
         let side = ((vw - cap) / 2.).max(px(MIN_SIDE_INSET));
@@ -1672,16 +1996,28 @@ impl Render for Editor {
             self.list.reset_with_uniform_height(self.items.len(), px(ITEM_HINT));
             self.list.scroll_to(top);
         }
+        let mut context = KeyContext::default();
+        // With the offer to create a note up, the text behind it takes no keys.
+        if self.offer.is_none() {
+            context.add("Editor");
+            if self.slash.is_some() && self.marked.is_none() {
+                context.add("slash_menu");
+            }
+        }
         let root = div()
             .id("editor")
-            .key_context("Editor")
+            .key_context(context)
             .track_focus(&self.focus)
             .size_full()
             .relative()
+            .flex()
+            .flex_row()
             .bg(t().page_content)
             .text_color(t().text)
             .font(self.typo.body())
-            .cursor(if self.hovered_link.is_some() {
+            .cursor(if self.thumb_hover || self.thumb_drag.is_some() {
+                CursorStyle::Arrow
+            } else if self.hovered_link.is_some() {
                 CursorStyle::PointingHand
             } else if self.over_video {
                 CursorStyle::Arrow
@@ -1700,23 +2036,23 @@ impl Render for Editor {
         let status = self.show_status.then(|| self.status_text());
         let videos = self.videos.clone();
         let frame_timer = self.frame_timer.clone();
-        root.on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
-            .on_mouse_move(cx.listener(Self::mouse_move))
-            .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
-            .child(
-                list(self.list.clone(), cx.processor(Self::render_item))
-                    .size_full()
-                    .pt(px(TOP_PAD))
-                    .pb(px(BOTTOM_PAD)),
-            )
-            .children(self.fade_band())
+        let dragging = self.selecting || self.thumb_drag.is_some();
+        let panel = self.slash_panel(window, cx);
+        let offer = self.offer_view(window, cx);
+        let rail = self.rail_view(window, cx);
+        let content = div()
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .child(list(self.list.clone(), cx.processor(Self::render_item)).size_full())
             .children(thumb.map(|(top, height)| {
                 div()
                     .absolute()
                     .right(px(1.5))
-                    .top(top + px(2.))
+                    .top(top)
                     .w(px(4.))
-                    .h(height - px(4.))
+                    .h(height)
                     .rounded(px(2.))
                     .bg(t().faint_icon.opacity(0.6))
             }))
@@ -1750,14 +2086,17 @@ impl Render for Editor {
                     .text_color(t().marker)
                     .child(text)
             }))
+            .children(panel)
+            .children(offer)
             .child(
                 canvas(
-                    // The column centers in this editor's own width, which only
+                    // The column centers in the text pane's own width, which only
                     // layout knows. A change takes effect on the next frame.
                     move |bounds, _, cx| {
                         let _ = measured.update(cx, |e, cx| {
-                            if e.pane_width != Some(bounds.size.width) {
+                            if e.pane_width != Some(bounds.size.width) || e.pane_height != Some(bounds.size.height) {
                                 e.pane_width = Some(bounds.size.width);
+                                e.pane_height = Some(bounds.size.height);
                                 cx.notify();
                             }
                         });
@@ -1772,12 +2111,41 @@ impl Render for Editor {
                             media::pump(cx);
                         }
                         media_clock(&videos, &frame_timer, &entity, cx);
+                        // A press held on the text or the scroller goes on wherever
+                        // the pointer goes.
+                        if dragging {
+                            let moved = entity.clone();
+                            window.on_mouse_event(move |e: &MouseMoveEvent, phase, _, cx| {
+                                if phase == DispatchPhase::Bubble && e.pressed_button == Some(MouseButton::Left) {
+                                    moved.update(cx, |this, cx| this.drag_move(e.position, cx));
+                                }
+                            });
+                            let released = entity.clone();
+                            window.on_mouse_event(move |e: &MouseUpEvent, phase, _, cx| {
+                                if phase == DispatchPhase::Bubble && e.button == MouseButton::Left {
+                                    released.update(cx, |this, cx| this.release(cx));
+                                }
+                            });
+                        }
                         metrics::frame_end();
                     },
                 )
                 .absolute()
                 .size_full(),
-            )
+            );
+        root.on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
+            .on_mouse_move(cx.listener(Self::mouse_move))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if !*hovered {
+                    this.clear_link_hover();
+                    this.thumb_hover = false;
+                    cx.notify();
+                }
+            }))
+            .child(content)
+            .children(self.fade_band())
+            .children(rail)
     }
 }
 
@@ -1882,7 +2250,9 @@ impl Editor {
                 let caret = (p.first_line == self.caret_line).then(|| self.head - self.doc.line_start(p.first_line));
                 let mut d = self.display_of(p.first_line, caret);
                 self.fill_math(&mut d, window);
-                let new_height = shape(&d, self.list_width, window).height(&d);
+                let ix = self.item_of(p.first_line);
+                let room = if ix == 0 { px(TOP_PAD) } else { px(0.) } + if ix + 1 == self.items.len() { px(BOTTOM_PAD) } else { px(0.) };
+                let new_height = shape(&d, self.list_width, window).height(&d) + room;
                 let above_caret = caret_top.is_some_and(|top| p.bounds.top() < top);
                 if above_caret || p.bounds.top() < view.top() {
                     shift += new_height - height;
@@ -2173,26 +2543,95 @@ impl Editor {
         }
     }
 
+    /// The thumb's top and height in the pane, while it shows.
     fn scroll_thumb(&self) -> Option<(Pixels, Pixels)> {
         let recently = self.scrolled_at.is_some_and(|t| t.elapsed() < Duration::from_millis(1000));
         if !recently && !self.thumb_hover && self.thumb_drag.is_none() {
             return None;
         }
-        // By item index, because the list only knows the heights it has laid
-        // out and a pixel-based thumb would wander as it learns more.
-        let view = self.list.viewport_bounds().size.height;
-        let count = self.items.len();
-        if view <= px(0.) || count < 2 {
-            return None;
-        }
-        let shown = self.painted.borrow().len().max(self.last_shown).max(1);
-        if shown >= count {
-            return None;
-        }
-        let height = (view * (shown as f32 / count as f32)).max(px(28.));
-        let at = self.list.logical_scroll_top().item_ix as f32 / (count - shown) as f32;
-        Some(((view - height) * at.clamp(0., 1.), height))
+        self.thumb_metrics()
     }
+
+    fn thumb_metrics(&self) -> Option<(Pixels, Pixels)> {
+        let view = f32::from(self.list.viewport_bounds().size.height);
+        let max = f32::from(self.list.max_offset_for_scrollbar().y);
+        let offset = -f32::from(self.list.scroll_px_offset_for_scrollbar().y);
+        let (top, height) = thumb_rect(view, view + max, offset)?;
+        Some((px(top), px(height)))
+    }
+
+    fn over_scroller(&self, p: Point<Pixels>) -> bool {
+        let view = self.list.viewport_bounds();
+        p.x >= view.right() - px(SCROLLER_SLOT) && p.x <= view.right() && p.y >= view.top() && p.y <= view.bottom()
+    }
+
+    /// A press in the scroller's slot, while the thumb can be seen: on the thumb
+    /// it takes hold, elsewhere it pages toward the pointer.
+    fn press_scroller(&mut self, p: Point<Pixels>, cx: &mut Context<Self>) -> bool {
+        if !self.over_scroller(p) {
+            return false;
+        }
+        let Some((top, height)) = self.scroll_thumb() else { return false };
+        let view = self.list.viewport_bounds();
+        let y = p.y - view.top();
+        if y >= top && y <= top + height {
+            self.thumb_drag = Some(y - top);
+            self.list.scrollbar_drag_started();
+        } else {
+            let page = view.size.height - px(10.);
+            self.list.scroll_by(if y < top { -page } else { page });
+        }
+        cx.notify();
+        true
+    }
+
+    fn drag_scroller(&mut self, p: Point<Pixels>, cx: &mut Context<Self>) {
+        let (Some(grab), Some((_, height))) = (self.thumb_drag, self.thumb_metrics()) else { return };
+        let view = self.list.viewport_bounds();
+        let max = f32::from(self.list.max_offset_for_scrollbar().y);
+        let offset = thumb_offset(
+            f32::from(p.y - view.top() - grab),
+            f32::from(view.size.height),
+            f32::from(height),
+            max,
+        );
+        self.list.set_offset_from_scrollbar(point(px(0.), px(-offset)));
+        self.scrolled_at = Some(Instant::now());
+        cx.notify();
+    }
+
+    /// The pointer in the slot brings the thumb up.
+    fn track_scroller(&mut self, p: Point<Pixels>, cx: &mut Context<Self>) {
+        let over = self.over_scroller(p) && self.thumb_metrics().is_some();
+        if over != self.thumb_hover {
+            self.thumb_hover = over;
+            cx.notify();
+        }
+    }
+}
+
+/// The scroller's slot, at the pane's right edge.
+const SCROLLER_SLOT: f32 = 7.;
+
+/// The thumb's top and height for a pane `view` tall showing `content` from
+/// `offset`: its true length, inset 2 at each end, at least 24 tall. None if it
+/// all fits.
+pub fn thumb_rect(view: f32, content: f32, offset: f32) -> Option<(f32, f32)> {
+    if view <= 0. || content <= view {
+        return None;
+    }
+    let raw_height = view * view / content;
+    let raw_top = (view - raw_height) * (offset / (content - view)).clamp(0., 1.);
+    let inset_height = raw_height - 4.;
+    let height = inset_height.max(24.);
+    let middle = raw_top + 2. + inset_height / 2.;
+    Some((middle - height / 2., height))
+}
+
+/// Where the scroll offset goes for a thumb dragged to `top`.
+pub fn thumb_offset(top: f32, view: f32, height: f32, max: f32) -> f32 {
+    let travel = (view - height).max(1.);
+    (top / travel).clamp(0., 1.) * max
 }
 
 // The input method path -------------------------------------------------------
@@ -2246,10 +2685,17 @@ impl EntityInputHandler for Editor {
             .map(|r| self.doc.byte_of_utf16(r.start)..self.doc.byte_of_utf16(r.end))
             .or(self.marked.clone())
             .unwrap_or_else(|| self.selection());
+        // A lone slash, typed or committed in place of what was being composed, not
+        // one replacing a selection.
+        let lone_slash = slash::is_lone_trigger(text) && (range.is_empty() || self.marked.as_ref() == Some(&range));
+        let was_open = self.slash.is_some();
         self.edit(range, text, !composing, composing);
         // A committed composition is a finished unit for undo.
         if composing {
             self.can_coalesce = false;
+        }
+        if lone_slash && !was_open {
+            self.open_slash_if_typed(cx);
         }
         self.schedule_after_edit(cx);
         cx.notify();
@@ -2268,7 +2714,9 @@ impl EntityInputHandler for Editor {
             .or(self.marked.clone())
             .unwrap_or_else(|| self.selection());
         let at = range.start;
+        self.slash_hold = true;
         self.edit(range, text, false, true);
+        self.slash_hold = false;
         self.can_coalesce = true;
         self.marked = (!text.is_empty()).then(|| at..at + text.len());
         if let Some(sel) = selected {
@@ -2276,6 +2724,7 @@ impl EntityInputHandler for Editor {
             self.anchor = self.doc.byte_of_utf16(base + sel.start);
             self.head = self.doc.byte_of_utf16(base + sel.end);
         }
+        self.refresh_slash();
         self.schedule_after_edit(cx);
         cx.notify();
     }
@@ -2445,6 +2894,40 @@ mod tests {
 
     fn item_ix(items: &[Item], line: u32) -> usize {
         items.iter().position(|i| i.start == line).unwrap()
+    }
+
+    #[core::prelude::v1::test]
+    fn the_thumb_keeps_its_true_length_inside_its_inset() {
+        // A third of the note showing, at the top: a third of the pane, less 4.
+        let (top, height) = thumb_rect(600., 1800., 0.).unwrap();
+        assert_eq!((top, height), (2., 196.));
+        // At the end it stops 2 short of the bottom.
+        let (top, height) = thumb_rect(600., 1800., 1200.).unwrap();
+        assert_eq!(top + height, 598.);
+        // A long note: 24 at the least.
+        let (_, height) = thumb_rect(600., 600_000., 0.).unwrap();
+        assert_eq!(height, 24.);
+        // Everything fits: no thumb.
+        assert_eq!(thumb_rect(600., 600., 0.), None);
+        assert_eq!(thumb_rect(0., 600., 0.), None);
+    }
+
+    #[core::prelude::v1::test]
+    fn dragging_the_thumb_reaches_both_ends() {
+        assert_eq!(thumb_offset(0., 600., 200., 1200.), 0.);
+        assert_eq!(thumb_offset(400., 600., 200., 1200.), 1200.);
+        assert_eq!(thumb_offset(200., 600., 200., 1200.), 600.);
+        assert_eq!(thumb_offset(-50., 600., 200., 1200.), 0.);
+        assert_eq!(thumb_offset(900., 600., 200., 1200.), 1200.);
+    }
+
+    #[core::prelude::v1::test]
+    fn multi_line_display_math_folds_into_one_item() {
+        let lines = scan_all("a\n\n$$ x\ny\nz $$\n\nb");
+        let items = build_items(&lines, None);
+        let math: Vec<&Item> = items.iter().filter(|i| i.kind == ItemKind::Math).collect();
+        assert_eq!(math.len(), 1);
+        assert_eq!((math[0].start, math[0].len), (2, 3));
     }
 
     #[core::prelude::v1::test]

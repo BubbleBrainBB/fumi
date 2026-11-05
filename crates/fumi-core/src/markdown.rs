@@ -169,15 +169,21 @@ pub fn pair_blocks<'a>(lines: impl Iterator<Item = &'a str>) -> Vec<bool> {
             continue;
         }
         let t = line.trim();
-        if t == "$$" {
-            match open_math.take() {
-                Some(a) => {
-                    real[a] = true;
-                    real[i] = true;
-                }
-                None => open_math = Some(i),
+        // `$$` needn't stand alone: `$$ a` opens and `b $$` closes. A line with
+        // two of them is a whole formula, and one in the middle of a line isn't
+        // a block's edge, which ends the attempt.
+        let marks = display_math_marks(line);
+        if let Some(a) = open_math {
+            if marks % 2 == 1 && t.ends_with("$$") {
+                real[a] = true;
+                real[i] = true;
+                open_math = None;
+            } else if marks > 0 {
+                open_math = None;
             }
-        } else if open_math.is_none() && t.starts_with(":::") {
+        } else if marks % 2 == 1 && t.starts_with("$$") {
+            open_math = Some(i);
+        } else if t.starts_with(":::") {
             match open_callout.take() {
                 Some(a) => {
                     real[a] = true;
@@ -209,7 +215,7 @@ pub fn classify(line: &str, next: Option<&str>, before: Scan, _index: usize, rea
             return info(Kind::FenceBody, before);
         }
         Scan::Math => {
-            if t == "$$" && real {
+            if real && t.ends_with("$$") {
                 return info(Kind::MathClose, Scan::Normal);
             }
             return info(Kind::MathBody, Scan::Math);
@@ -246,7 +252,7 @@ pub fn classify(line: &str, next: Option<&str>, before: Scan, _index: usize, rea
         if let Some((ch, len, _)) = fence_of(line) {
             return info(Kind::FenceOpen, Scan::Fence { ch, len });
         }
-        if t == "$$" {
+        if t.starts_with("$$") {
             return info(Kind::MathOpen, Scan::Math);
         }
     }
@@ -439,7 +445,22 @@ pub fn scan_all(text: &str) -> Vec<LineInfo> {
 /// the note, which only a whole-text pass can tell.
 pub fn pairing_sensitive(line: &str) -> bool {
     let t = line.trim();
-    fence_of(line).is_some() || t.starts_with("$$") || t.ends_with("$$") || t.starts_with(":::") || t == "---" || t == "..."
+    fence_of(line).is_some() || t.contains("$$") || t.starts_with(":::") || t == "---" || t == "..."
+}
+
+/// How many `$$` a line holds, not counting a backslashed one.
+pub fn display_math_marks(line: &str) -> usize {
+    let b = line.as_bytes();
+    let (mut i, mut n) = (0, 0);
+    while i + 1 < b.len() {
+        if b[i] == b'$' && b[i + 1] == b'$' && (i == 0 || b[i - 1] != b'\\') {
+            n += 1;
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    n
 }
 
 /// The line that closes frontmatter opening on the first line.
@@ -561,5 +582,26 @@ mod tests {
         let line = "| a | `b|c` | 中 |";
         let cells: Vec<&str> = table_cells(line).into_iter().map(|c| &line[c]).collect();
         assert_eq!(cells, ["a", "`b|c`", "中"]);
+    }
+
+    #[test]
+    fn display_math_needs_no_lone_delimiter_lines() {
+        let kinds = |text: &str| scan_all(text).iter().map(|l| l.kind).collect::<Vec<_>>();
+        assert_eq!(kinds("$$ a\nb\nc $$"), [Kind::MathOpen, Kind::MathBody, Kind::MathClose]);
+        assert_eq!(kinds("$$\nb $$"), [Kind::MathOpen, Kind::MathClose]);
+        assert_eq!(kinds("$$ a\n$$"), [Kind::MathOpen, Kind::MathClose]);
+        assert_eq!(kinds("$$a$$"), [Kind::MathOne]);
+        // Unclosed, or closed in the middle of a line: ordinary text.
+        assert_eq!(kinds("$$ a\nb"), [Kind::Para, Kind::Para]);
+        assert_eq!(kinds("$$ a\nb $$ c"), [Kind::Para, Kind::Para]);
+        // Inside code it's code.
+        assert_eq!(kinds("```\n$$\n```"), [Kind::FenceOpen, Kind::FenceBody, Kind::FenceClose]);
+    }
+
+    #[test]
+    fn display_math_marks_skip_escapes() {
+        assert_eq!(display_math_marks("$$a$$"), 2);
+        assert_eq!(display_math_marks("\\$$a"), 0);
+        assert_eq!(display_math_marks("a"), 0);
     }
 }
