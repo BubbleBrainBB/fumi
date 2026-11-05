@@ -1,0 +1,2 @@
+Bundled from Tools/wechat-renderer/src (forked from the wechat-black-red skill; black-red theme 1.4.0).
+Rebuild with: cd Tools/wechat-renderer && node build.mjs

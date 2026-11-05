@@ -1,0 +1,149 @@
+/* Xiaohongshu cards (design boards ㊿ Memo / Grid, 51 Post). Every card is
+   laid out at 300 CSS px wide and exported at 1080 px, so 1 px here is
+   3.6 px in the image. */
+
+html, body { margin: 0; background: transparent; }
+body { -webkit-font-smoothing: antialiased; -webkit-user-select: none; user-select: none; }
+
+/* The preview: three columns of cards, scaled down to fit the sheet. */
+body.preview #deck {
+  display: grid; grid-template-columns: repeat(3, var(--cell-w)); gap: 8px;
+  justify-content: center; align-content: start; padding: 16px 0 0;
+}
+body.preview .cell { width: var(--cell-w); height: var(--cell-h); position: relative; border-radius: 6px;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.07), 0 2px 6px rgba(0,0,0,.05); overflow: hidden; cursor: default; }
+body.preview .cell > .card { position: absolute; left: 0; top: 0; transform: scale(var(--scale)); transform-origin: 0 0; }
+body.preview .cell.menu { box-shadow: 0 0 0 2px var(--accent, #1D6FC2), 0 2px 6px rgba(0,0,0,.05); }
+
+/* Export: the cards one under another at full size. */
+body.export #deck { display: flex; flex-direction: column; gap: 20px; padding: 0; }
+#measure { position: absolute; left: -10000px; top: 0; visibility: hidden; }
+
+.card {
+  position: relative; width: 300px; height: var(--card-h, 400px); box-sizing: border-box; overflow: hidden;
+  display: flex; flex-direction: column;
+  font-family: 'PingFang SC', -apple-system, 'Helvetica Neue', sans-serif;
+  line-break: strict; text-wrap: pretty; overflow-wrap: break-word;
+}
+.card .body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; }
+.card.centered .body { justify-content: center; gap: 18px; }
+.card p, .card h1, .card h2, .card h3, .card figure, .card blockquote, .card ul, .card ol, .card pre, .card table { margin: 0; }
+.card .spacer { flex: 1; }
+.card .nw { white-space: nowrap; }
+.card code { font-family: 'SF Mono', Menlo, monospace; font-size: .88em; padding: 0 3px; border-radius: 3px; }
+.card pre { padding: 10px 12px; border-radius: 6px; font: 11px/1.6 'SF Mono', Menlo, monospace;
+  white-space: pre-wrap; word-break: break-all; }
+.card pre code { padding: 0; font-size: inherit; background: none; }
+.card table { width: 100%; border-collapse: collapse; font-size: 11.5px; line-height: 1.5; }
+.card th, .card td { padding: 6px 6px; text-align: left; vertical-align: top; }
+.card th { font-weight: 600; }
+.card ul, .card ol { padding-left: 20px; }
+.card li + li { margin-top: 6px; }
+.card figure { display: flex; flex-direction: column; }
+.card figure .lead { margin-bottom: 12px; }
+/* White behind every image: a transparent chart reads as it does in the note, on any card. */
+.card figure .img { align-self: center; overflow: hidden; background: #FFFFFF; }
+.card figure .img.pending { background: rgba(127,127,127,.12); }
+.card figure img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.card figcaption { margin-top: 8px; font-size: 11px; line-height: 1.5; text-align: center; }
+.card .link { text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+.card i { font-style: italic; }
+.card .zoomed { transform-origin: 0 0; }
+
+/* ───────── Memo ───────── */
+.t-memo { background: #FFFFFF; padding: 30px 24px 18px; color: #2E2D2A; }
+.t-memo::before { content: ''; position: absolute; left: 24px; top: 0; width: 38px; height: 9px;
+  border-radius: 0 0 3px 3px; background: #FFD84D; }
+.t-memo .body p, .t-memo .body li, .t-memo blockquote.inline { font-size: 14px; line-height: 1.85; color: #2E2D2A; }
+.t-memo b { font-weight: 700; color: #1B1B1A; background: linear-gradient(transparent 60%, #FFE070 60%); }
+.t-memo mark { background: #FFE070; color: inherit; }
+.t-memo u { text-decoration: underline; text-decoration-color: #FFC933; text-decoration-thickness: 2px; text-underline-offset: 3px; }
+.t-memo s { color: #8E8D89; }
+.t-memo code { background: #F3F2EE; }
+.t-memo pre { background: #F7F6F3; color: #37352F; }
+.t-memo th { border-bottom: 1px solid #D9D7D0; } .t-memo td { border-bottom: 1px solid #EEEDE8; }
+.t-memo .runhead { font-size: 11px; color: #6F6D67; margin-bottom: 12px; }
+.t-memo .chapter h2 { margin-top: 4px; font-size: 32px; line-height: 1.2; font-weight: 800; color: #1B1B1A; }
+.t-memo .chapter .hl { background: linear-gradient(transparent 58%, #FFE070 58%); }
+.t-memo .chapter .rule { height: 1px; background: #ECEBE7; margin-top: 16px; }
+.t-memo h3 { font-size: 16px; line-height: 1.5; font-weight: 800; color: #1B1B1A; }
+.t-memo figure .img { border-radius: 8px; box-shadow: 0 0 0 1px #ECEBE7; }
+.t-memo figcaption { color: #6F6D67; }
+.t-memo blockquote.inline { padding-left: 12px; border-left: 3px solid #FFD84D; }
+.t-memo .foot { display: flex; justify-content: space-between; margin-top: 10px; padding-top: 11px;
+  border-top: 1px dashed #E4E2DC; font-size: 10.5px; color: #6F6D67; }
+.t-memo.quote blockquote { font-size: 20px; line-height: 1.7; font-weight: 700; color: #1B1B1A; }
+.t-memo.quote .mark { font-size: 64px; line-height: .8; height: 36px; font-weight: 800; color: #FFD84D; }
+.t-memo.end .name { font-size: 22px; font-weight: 800; color: #1B1B1A; }
+.t-memo.end .handle { font-size: 13px; color: #6F6D67; }
+.t-memo.end .line { font-size: 15px; line-height: 1.8; color: #46443F; }
+
+/* ───────── Grid ───────── */
+.t-grid { background-color: #FBFBF8;
+  background-image: linear-gradient(rgba(47,107,255,.08) 1px, transparent 1px), linear-gradient(90deg, rgba(47,107,255,.08) 1px, transparent 1px);
+  background-size: 20px 20px; padding: 24px 24px 18px; color: #262624; }
+.t-grid .body p, .t-grid .body li, .t-grid blockquote.inline { font-size: 14px; line-height: 1.85; color: #262624; }
+.t-grid b { font-weight: 700; color: #2F6BFF; }
+.t-grid mark { background: rgba(47,107,255,.2); color: inherit; }
+.t-grid u { text-decoration: underline wavy #2F6BFF; text-underline-offset: 3px; }
+.t-grid s { color: #8E8D89; }
+.t-grid code { background: rgba(47,107,255,.08); }
+.t-grid pre { background: rgba(255,255,255,.85); box-shadow: 0 0 0 1px rgba(47,107,255,.15); color: #262624; }
+.t-grid th { border-bottom: 1.5px solid #2F6BFF; } .t-grid td { border-bottom: 1px solid rgba(47,107,255,.15); }
+.t-grid .num { flex: none; width: 24px; height: 24px; border-radius: 50%; background: #2F6BFF; color: #FFFFFF;
+  font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; margin-bottom: 14px; }
+.t-grid .head { display: flex; align-items: center; gap: 10px; }
+.t-grid .head .num { margin-bottom: 14px; }
+.t-grid .runhead { font-family: 'Kaiti SC', 'STKaiti', serif; font-size: 13px; color: #2F6BFF; margin-bottom: 14px; }
+.t-grid .chapter h2 { font-size: 30px; line-height: 1.25; font-weight: 800; color: #151515; }
+.t-grid .chapter .hl { background: rgba(47,107,255,.2); padding: 0 4px; border-radius: 3px; }
+.t-grid .chapter svg { display: block; margin-top: 4px; }
+.t-grid h3 { font-size: 16px; line-height: 1.5; font-weight: 800; color: #151515; }
+.t-grid figure .img { position: relative; overflow: visible; transform: rotate(-1.4deg); box-shadow: 0 3px 10px rgba(0,0,0,.1);
+  background: #FFFFFF; margin: 6px 0 2px; }
+.t-grid figure .img img { border-radius: 0; }
+.t-grid figure .img::before, .t-grid figure .img::after { content: ''; position: absolute; top: -7px; width: 46px; height: 14px;
+  background: rgba(250,210,90,.78); z-index: 1; }
+.t-grid figure .img::before { left: -8px; transform: rotate(-24deg); }
+.t-grid figure .img::after { right: -8px; transform: rotate(22deg); }
+.t-grid figcaption { align-self: flex-end; text-align: right; margin-top: 12px; font-family: 'Kaiti SC', 'STKaiti', serif;
+  font-size: 14px; color: #2F6BFF; }
+.t-grid blockquote.inline { padding-left: 12px; border-left: 3px solid #2F6BFF; }
+.t-grid .foot { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 10.5px; color: #5E5E5A; }
+.t-grid .foot .page { padding: 1px 8px; border-radius: 10px; border: 1px solid #2F6BFF; color: #2F6BFF; }
+.t-grid.quote blockquote { font-size: 20px; line-height: 1.7; font-weight: 700; color: #151515; }
+.t-grid.quote .mark { font-family: 'Kaiti SC', 'STKaiti', serif; font-size: 64px; line-height: .8; height: 36px; color: #2F6BFF; }
+.t-grid.end .name { font-size: 22px; font-weight: 800; color: #151515; }
+.t-grid.end .handle { font-size: 13px; color: #2F6BFF; }
+.t-grid.end .line { font-family: 'Kaiti SC', 'STKaiti', serif; font-size: 17px; line-height: 1.7; color: #262624; }
+
+/* ───────── Post ───────── */
+.t-post { --ink: #0F1419; --text: #0F1419; --muted: #5F656B; --line: #E1E4E7; --rule: #EEF0F2;
+  --avatar: #E4DFD4; --avatar-ink: #6B6457; --strong: #0F1419;
+  background: #FFFFFF; padding: 26px 22px 16px; color: var(--text); }
+.t-post.dark { --ink: #EDEDEB; --text: #E6E6E3; --muted: #8E9196; --line: #33363B; --rule: #2C2E33;
+  --avatar: #34363B; --avatar-ink: #C9C9C6; --strong: #FFFFFF; background: #141518; }
+.t-post .body p, .t-post .body li, .t-post blockquote.inline { font-size: 15px; line-height: 1.65; color: var(--text); }
+.t-post b { font-weight: 700; color: var(--strong); }
+.t-post mark { background: rgba(255,214,64,.45); color: inherit; }
+.t-post u { text-decoration: underline; text-underline-offset: 3px; }
+.t-post s { color: var(--muted); }
+.t-post code { background: var(--rule); }
+.t-post pre { background: var(--rule); color: var(--text); }
+.t-post th { border-bottom: 1px solid var(--line); } .t-post td { border-bottom: 1px solid var(--rule); }
+.t-post .who { flex: none; display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.t-post .avatar { flex: none; width: 42px; height: 42px; border-radius: 50%; background: var(--avatar); color: var(--avatar-ink);
+  font-size: 17px; font-weight: 600; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.t-post .avatar img { width: 100%; height: 100%; object-fit: cover; }
+.t-post .names { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+.t-post .name { font-size: 15px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t-post .handle { font-size: 13px; color: var(--muted); }
+.t-post .who .page { align-self: flex-start; margin-top: 3px; font-size: 12px; color: var(--muted); }
+.t-post.thread::before { content: ''; position: absolute; left: 42px; top: 0; width: 2px; height: 24px; background: var(--line); }
+.t-post .chapter h2 { font-size: 17px; line-height: 1.5; font-weight: 800; color: var(--ink); }
+.t-post h3 { font-size: 15px; line-height: 1.5; font-weight: 800; color: var(--ink); }
+.t-post figure .img { border-radius: 14px; box-shadow: 0 0 0 1px var(--line); }
+.t-post figcaption { color: var(--muted); }
+.t-post blockquote.inline { padding-left: 12px; border-left: 3px solid var(--line); }
+.t-post.quote blockquote { font-size: 19px; line-height: 1.6; font-weight: 700; color: var(--ink); }
+.t-post.end .line { font-size: 17px; line-height: 1.6; color: var(--text); }

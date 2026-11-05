@@ -1562,6 +1562,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "fumi-publish"
+version = "0.1.0"
+dependencies = [
+ "block",
+ "cocoa 0.26.1",
+ "fumi-core",
+ "fumi-editor",
+ "fumi-toolbar",
+ "fumi-ui",
+ "fumi-workspace",
+ "futures",
+ "gpui-pre",
+ "gpui-pre-platform",
+ "libc",
+ "objc",
+ "ratex-gpui",
+ "raw-window-handle",
+ "regex",
+ "serde",
+ "serde_json",
+ "smallvec",
+]
+
+[[package]]
 name = "fumi-settings"
 version = "0.1.0"
 dependencies = [
