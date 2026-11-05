@@ -9,7 +9,7 @@ R=${0:A:h:h}
 ID=${BUNDLE_ID:-com.fumi.gpui-prototype}
 EXEC=${BUNDLE_EXEC:-FumiGPUI}
 A=${BUNDLE_OUT:-$R/target/FumiGPUI.app}
-ASSETS=${FUMI_SWIFT:-$R/../notes-app}/Fumi/Resources/Assets.xcassets/AppIcon.appiconset
+ASSETS=$R/resources/AppIcon.appiconset
 VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' $R/Cargo.toml | head -1)
 
 mkdir -p $A/Contents/MacOS $A/Contents/Resources
