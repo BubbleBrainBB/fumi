@@ -535,7 +535,7 @@ impl Element for LineEl {
         }
 
         // The code block's language, top right.
-        if let Some(language) = &d.code_language {
+        if let Some((language, above)) = &d.code_language {
             let run = TextRun {
                 len: language.len(),
                 font: ui_font(),
@@ -545,9 +545,8 @@ impl Element for LineEl {
                 strikethrough: None,
             };
             let line = window.text_system().shape_line(language.clone(), px(12.), &[run], None);
-            let box_top = top_y - px(BLOCK_PADDING);
             let x = column_x + column_w - px(12.) - line.width;
-            let _ = line.paint(point(x, box_top + px(7.)), px(15.), TextAlign::Left, None, window, cx);
+            let _ = line.paint(point(x, top_y - px(*above)), px(15.), TextAlign::Left, None, window, cx);
         }
 
         if let Some(caret) = self.caret {

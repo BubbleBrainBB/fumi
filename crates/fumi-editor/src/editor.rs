@@ -25,7 +25,7 @@ actions!(
         Backspace, Delete, Enter, Left, Right, Up, Down, SelectLeft, SelectRight, SelectUp,
         SelectDown, WordLeft, WordRight, SelectWordLeft, SelectWordRight, LineStart, LineEnd,
         SelectLineStart, SelectLineEnd, DocStart, DocEnd, SelectDocStart, SelectDocEnd, PageUp,
-        PageDown, SelectAll, Copy, Cut, Paste, Undo, Redo, Save, CharacterPalette, Quit,
+        PageDown, SelectAll, Copy, Cut, Paste, Undo, Redo, Save, CharacterPalette, Quit, Bold, Italic, InsertLink, ToggleTaskLine,
     ]
 );
 
@@ -68,6 +68,10 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-z", Undo, c),
         KeyBinding::new("cmd-shift-z", Redo, c),
         KeyBinding::new("cmd-s", Save, c),
+        KeyBinding::new("cmd-b", Bold, c),
+        KeyBinding::new("cmd-i", Italic, c),
+        KeyBinding::new("cmd-k", InsertLink, c),
+        KeyBinding::new("cmd-l", ToggleTaskLine, c),
         KeyBinding::new("ctrl-cmd-space", CharacterPalette, c),
         KeyBinding::new("cmd-q", Quit, None),
     ]);
@@ -145,6 +149,52 @@ pub struct Editor {
     hovered_link: Option<(usize, Range<usize>)>,
     pub pane_width: Option<Pixels>,
     pub column_setting: String,
+    pending_link: Option<PendingLink>,
+    was_focused: bool,
+    hovered_web: Option<String>,
+    edit_epoch: u64,
+    scrolled_at: Option<Instant>,
+    last_scroll_top: (usize, f32),
+    thumb_hover: bool,
+    thumb_drag: Option<f32>,
+    /// False when the doc was replaced from outside and has no unsaved change.
+    pub dirty: bool,
+}
+
+/// What the editor tells the screen around it.
+#[derive(Clone, Debug)]
+pub enum EditorEvent {
+    /// 500 ms after the last change: time to save.
+    SaveRequested,
+    /// 300 ms after the last change: outline, counts and previews may refresh.
+    ContentSettled,
+    /// Saved at once, on ⌘S.
+    SaveNow,
+    /// A web address was clicked; already handed to the browser.
+    OpenedWeb(String),
+    /// A `[[link]]` was clicked. The inner text, `target#heading|alias`.
+    OpenWiki { inner: String, new_tab: bool, anchor: Bounds<Pixels> },
+    /// The caret or selection moved.
+    SelectionChanged,
+}
+
+impl EventEmitter<EditorEvent> for Editor {}
+
+/// A press that may become a link click: it stays one until it drags 3 pt.
+struct PendingLink {
+    link: Link,
+    at: Point<Pixels>,
+    new_tab: bool,
+    anchor: Bounds<Pixels>,
+}
+
+/// Where a note was left, to come back to.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ViewState {
+    pub anchor: usize,
+    pub head: usize,
+    pub scroll_item: usize,
+    pub scroll_offset: f32,
 }
 
 impl Editor {
@@ -193,6 +243,15 @@ impl Editor {
             hovered_link: None,
             pane_width: None,
             column_setting: fumi_ui::settings::editor_width(),
+            pending_link: None,
+            was_focused: false,
+            hovered_web: None,
+            edit_epoch: 0,
+            scrolled_at: None,
+            last_scroll_top: (0, 0.),
+            thumb_hover: false,
+            thumb_drag: None,
+            dirty: false,
         };
         this.load_bytes(bytes);
         if blink {
@@ -267,6 +326,8 @@ impl Editor {
         let is_math = |k: Kind| matches!(k, Kind::MathOpen | Kind::MathBody | Kind::MathClose);
         match kind {
             Kind::Image | Kind::MathOne => Some(line..line + 1),
+            // Offset 0 keeps the panel; it opens only from inside.
+            Kind::FrontOpen | Kind::FrontBody | Kind::FrontClose if self.head == 0 => None,
             Kind::FrontOpen | Kind::FrontBody | Kind::FrontClose => {
                 let mut b = line;
                 while b < self.lines.len() && self.lines[b].kind != Kind::FrontClose {
@@ -547,6 +608,144 @@ impl Editor {
         metrics::note_handler(t0.elapsed());
     }
 
+    /// Starts the 300 ms and 500 ms timers again; only the last edit's fire.
+    pub fn schedule_after_edit(&mut self, cx: &mut Context<Self>) {
+        self.dirty = true;
+        self.edit_epoch += 1;
+        let epoch = self.edit_epoch;
+        cx.spawn(async move |this: WeakEntity<Editor>, cx| {
+            cx.background_executor().timer(Duration::from_millis(300)).await;
+            let live = this
+                .update(cx, |e, cx| {
+                    let live = e.edit_epoch == epoch;
+                    if live {
+                        cx.emit(EditorEvent::ContentSettled);
+                    }
+                    live
+                })
+                .unwrap_or(false);
+            if !live {
+                return;
+            }
+            cx.background_executor().timer(Duration::from_millis(200)).await;
+            let _ = this.update(cx, |e, cx| {
+                if e.edit_epoch == epoch && e.marked.is_none() {
+                    cx.emit(EditorEvent::SaveRequested);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// ⌘B, ⌘I, ⌘K: always adds. With a selection the result, markers included,
+    /// stays selected; with none the caret sits inside the markers.
+    pub fn wrap_selection(&mut self, open: &str, close: &str, cx: &mut Context<Self>) {
+        let sel = self.selection();
+        let inner = self.doc.slice(sel.clone());
+        let text = format!("{open}{inner}{close}");
+        let had_selection = !sel.is_empty();
+        self.edit(sel.clone(), &text, false, false);
+        if had_selection {
+            self.anchor = sel.start;
+            self.head = sel.start + text.len();
+        } else {
+            self.anchor = sel.start + open.len();
+            self.head = self.anchor;
+        }
+        self.caret_moved(true);
+        self.schedule_after_edit(cx);
+        cx.notify();
+    }
+
+    /// ⌘L: flips the first `[ ]`, `[x]` or `[X]` on the caret's line.
+    fn toggle_task_on_caret_line(&mut self, cx: &mut Context<Self>) {
+        let line = self.doc.line_of(self.head);
+        let text = self.doc.line_text(line);
+        let found = ["[ ]", "[x]", "[X]"]
+            .iter()
+            .filter_map(|b| text.find(b))
+            .min();
+        let Some(at) = found else { return };
+        let start = self.doc.line_start(line) + at;
+        let new = if &text[at..at + 3] == "[ ]" { "[x]" } else { "[ ]" };
+        let sel = (self.anchor, self.head);
+        self.edit(start..start + 3, new, false, false);
+        self.anchor = sel.0;
+        self.head = sel.1;
+        self.caret_moved(false);
+        self.schedule_after_edit(cx);
+        cx.notify();
+    }
+
+    /// Replaces the text with what's on disk now, keeping the caret and the
+    /// scroll where they were as nearly as the change allows, with undo reset
+    /// at the seam. Only what differs is touched.
+    pub fn replace_from_outside(&mut self, text: &str, cx: &mut Context<Self>) {
+        let old = self.doc.rope.to_string();
+        if old == text {
+            self.dirty = false;
+            return;
+        }
+        let prefix = old.bytes().zip(text.bytes()).take_while(|(a, b)| a == b).count();
+        let mut prefix = prefix;
+        while !old.is_char_boundary(prefix) || !text.is_char_boundary(prefix) {
+            prefix -= 1;
+        }
+        let max_suffix = old.len().min(text.len()) - prefix;
+        let mut suffix = old.bytes().rev().zip(text.bytes().rev()).take(max_suffix).take_while(|(a, b)| a == b).count();
+        while !old.is_char_boundary(old.len() - suffix) || !text.is_char_boundary(text.len() - suffix) {
+            suffix -= 1;
+        }
+        let (old_end, new_end) = (old.len() - suffix, text.len() - suffix);
+        let map = |at: usize| {
+            if at <= prefix {
+                at
+            } else if at >= old_end {
+                at - old_end + new_end
+            } else {
+                new_end
+            }
+        };
+        let (anchor, head) = (map(self.anchor), map(self.head));
+        self.apply(prefix, old_end - prefix, &text[prefix..new_end], (anchor, head));
+        self.undo.clear();
+        self.redo.clear();
+        self.dirty = false;
+        cx.notify();
+    }
+
+    pub fn view_state(&self) -> ViewState {
+        let top = self.list.logical_scroll_top();
+        ViewState {
+            anchor: self.anchor,
+            head: self.head,
+            scroll_item: top.item_ix,
+            scroll_offset: f32::from(top.offset_in_item),
+        }
+    }
+
+    pub fn restore_view(&mut self, state: ViewState) {
+        let n = self.doc.len();
+        self.anchor = state.anchor.min(n);
+        self.head = state.head.min(n);
+        self.caret_moved(false);
+        self.list.scroll_to(ListOffset {
+            item_ix: state.scroll_item,
+            offset_in_item: px(state.scroll_offset),
+        });
+    }
+
+    pub fn text(&self) -> String {
+        self.doc.rope.to_string()
+    }
+
+    /// Scrolls a heading's line to the top with a little margin.
+    pub fn scroll_to_line(&mut self, line: usize, cx: &mut Context<Self>) {
+        let ix = self.item_of(line);
+        self.list.scroll_to(ListOffset { item_ix: ix, offset_in_item: px(-12.) });
+        cx.notify();
+    }
+
     fn apply(&mut self, at: usize, old_len: usize, text: &str, sel: (usize, usize)) {
         let first = self.doc.line_of(at);
         let removed = self.doc.line_of(at + old_len) - first;
@@ -570,6 +769,7 @@ impl Editor {
         if let Some(op) = self.undo.pop() {
             self.apply(op.at, op.new.len(), &op.old.clone(), op.sel_before);
             self.redo.push(op);
+            self.schedule_after_edit(cx);
             cx.notify();
         }
     }
@@ -578,6 +778,7 @@ impl Editor {
         if let Some(op) = self.redo.pop() {
             self.apply(op.at, op.old.len(), &op.new.clone(), op.sel_after);
             self.undo.push(op);
+            self.schedule_after_edit(cx);
             cx.notify();
         }
     }
@@ -585,6 +786,7 @@ impl Editor {
     pub fn replace_selection(&mut self, text: &str, typing: bool, cx: &mut Context<Self>) {
         let range = self.selection();
         self.edit(range, text, typing, false);
+        self.schedule_after_edit(cx);
         cx.notify();
     }
 
@@ -597,6 +799,7 @@ impl Editor {
         if self.selection_is_empty() {
             let at = self.prev_boundary(self.head);
             self.edit(at..self.head, "", false, false);
+            self.schedule_after_edit(cx);
         } else {
             self.replace_selection("", false, cx);
         }
@@ -607,6 +810,7 @@ impl Editor {
         if self.selection_is_empty() {
             let at = self.next_boundary(self.head);
             self.edit(self.head..at, "", false, false);
+            self.schedule_after_edit(cx);
         } else {
             self.replace_selection("", false, cx);
         }
@@ -785,6 +989,10 @@ impl Editor {
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::save))
+            .on_action(cx.listener(|this, _: &Bold, _, cx| this.wrap_selection("**", "**", cx)))
+            .on_action(cx.listener(|this, _: &Italic, _, cx| this.wrap_selection("*", "*", cx)))
+            .on_action(cx.listener(|this, _: &InsertLink, _, cx| this.wrap_selection("[", "](url)", cx)))
+            .on_action(cx.listener(|this, _: &ToggleTaskLine, _, cx| this.toggle_task_on_caret_line(cx)))
             .on_action(cx.listener(|_, _: &CharacterPalette, window, _| window.show_character_palette()));
         let el = act!(el, Left, |this, _w| {
             let to = if this.selection_is_empty() { this.prev_boundary(this.head) } else { this.selection().start };
@@ -839,15 +1047,8 @@ impl Editor {
         }
     }
 
-    fn save(&mut self, _: &Save, _: &mut Window, _: &mut Context<Self>) {
-        if let Some(path) = &self.path {
-            // Written beside the file, then moved over it, so a crash mid-save
-            // can't leave a half-written note.
-            let tmp = path.with_extension("fumi-tmp");
-            if std::fs::write(&tmp, self.doc.to_bytes()).is_ok() {
-                let _ = std::fs::rename(&tmp, path);
-            }
-        }
+    fn save(&mut self, _: &Save, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(EditorEvent::SaveNow);
     }
 
     // Mouse ----------------------------------------------------------------
@@ -906,12 +1107,59 @@ impl Editor {
         self.caret_moved(false);
     }
 
+    /// The link under `p`: its visible range, its line, its target and its box.
+    fn link_at(&self, p: Point<Pixels>) -> Option<(usize, Range<usize>, Link, Bounds<Pixels>)> {
+        let painted = self.painted.borrow();
+        let item = painted.iter().find(|i| p.y >= i.bounds.top() && p.y < i.bounds.bottom())?;
+        let (d, s) = item.text.as_ref()?;
+        let text_x = item.bounds.left() + d.margin + d.indent;
+        let top = item.bounds.top() + d.top;
+        let row_ix = s.row_at(p.y - top);
+        let r = s.laid.rows[row_ix];
+        for (range, link) in &d.links {
+            let (a, e) = (range.start.max(r.start), range.end.min(r.end));
+            if a >= e {
+                continue;
+            }
+            // The glyph box, a little forgiving.
+            let x0 = text_x + s.laid.x_for_index(a) - r.x0 - px(1.);
+            let x1 = text_x + s.laid.x_for_index(e) - r.x0 + px(1.);
+            let base = top + r.y + s.baseline(row_ix);
+            let (y0, y1) = (base - s.ascent - px(2.), base + s.descent + px(2.));
+            if p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1 {
+                let anchor = Bounds::from_corners(point(x0, y0), point(x1, y1));
+                return Some((item.first_line, range.clone(), link.clone(), anchor));
+            }
+        }
+        None
+    }
+
     fn mouse_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
         if let Some(line) = self.task_at(e.position) {
             self.toggle_task(line);
+            self.schedule_after_edit(cx);
             cx.notify();
             return;
+        }
+        self.pending_link = None;
+        if e.click_count == 1
+            && !e.modifiers.shift
+            && let Some((line, _, link, anchor)) = self.link_at(e.position)
+        {
+            // Unmodified: opens, unless the caret is already on that line and
+            // the editor has focus, when it edits. ⌘ always opens.
+            let editing = self.caret_line == line && self.was_focused;
+            if e.modifiers.platform || !editing {
+                self.pending_link = Some(PendingLink {
+                    link,
+                    at: e.position,
+                    new_tab: e.modifiers.platform,
+                    anchor,
+                });
+                cx.notify();
+                return;
+            }
         }
         let at = self.hit_test(e.position);
         let line = self.doc.line_of(at);
@@ -943,6 +1191,34 @@ impl Editor {
     }
 
     fn mouse_move(&mut self, e: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(pending) = &self.pending_link {
+            // Dragging off a link selects instead of opening.
+            let moved = e.position - pending.at;
+            if f32::from(moved.x).abs() > 3. || f32::from(moved.y).abs() > 3. {
+                let at = pending.at;
+                self.pending_link = None;
+                let head = self.hit_test(at);
+                self.selecting = true;
+                self.press_at = at;
+                self.dragged = true;
+                self.set_head_from_mouse(head, false);
+            } else {
+                return;
+            }
+        }
+        if e.pressed_button.is_none() {
+            let hit = self.link_at(e.position);
+            let hovered = hit.as_ref().map(|(l, r, _, _)| (*l, r.clone()));
+            let web = hit.and_then(|(_, _, link, _)| match link {
+                Link::Web(address) => Some(address),
+                Link::Wiki(_) => None,
+            });
+            if hovered != self.hovered_link || web != self.hovered_web {
+                self.hovered_link = hovered;
+                self.hovered_web = web;
+                cx.notify();
+            }
+        }
         if self.selecting && e.pressed_button == Some(MouseButton::Left) {
             // A click can open a block and move text under a still pointer; a
             // little hand tremor mustn't turn that into a selection.
@@ -959,8 +1235,21 @@ impl Editor {
         }
     }
 
-    fn mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
+    fn mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.selecting = false;
+        if let Some(pending) = self.pending_link.take() {
+            match pending.link {
+                Link::Web(address) => {
+                    cx.open_url(&address);
+                    cx.emit(EditorEvent::OpenedWeb(address));
+                }
+                Link::Wiki(inner) => cx.emit(EditorEvent::OpenWiki {
+                    inner,
+                    new_tab: pending.new_tab,
+                    anchor: pending.anchor,
+                }),
+            }
+        }
     }
 
     // Rendering ------------------------------------------------------------
@@ -1035,6 +1324,7 @@ impl Editor {
                 links: self.links.as_ref(),
                 real,
                 raw_block: false,
+                prev_has_caret: line > 0 && self.caret_line == line - 1,
             },
         );
         d.margin = self.margin;
@@ -1188,8 +1478,10 @@ impl Render for Editor {
             .bg(t().page_content)
             .text_color(t().text)
             .font(self.typo.body())
-            .cursor(CursorStyle::IBeam);
+            .cursor(if self.hovered_link.is_some() { CursorStyle::PointingHand } else { CursorStyle::IBeam });
         let root = self.register_actions(root, cx);
+        self.was_focused = self.focus.is_focused(window);
+        self.note_scroll(window, cx);
 
         let entity = cx.entity();
         let focus = self.focus.clone();
@@ -1204,15 +1496,37 @@ impl Render for Editor {
                     .pt(px(TOP_PAD))
                     .pb(px(BOTTOM_PAD)),
             )
+            .children(self.fade_band())
             .children(thumb.map(|(top, height)| {
                 div()
                     .absolute()
-                    .right(px(3.))
-                    .top(top)
-                    .w(px(5.))
-                    .h(height)
-                    .rounded(px(3.))
-                    .bg(t().text.opacity(0.18))
+                    .right(px(1.5))
+                    .top(top + px(2.))
+                    .w(px(4.))
+                    .h(height - px(4.))
+                    .rounded(px(2.))
+                    .bg(t().faint_icon.opacity(0.6))
+            }))
+            .children(self.hovered_web.clone().map(|address| {
+                let c = t();
+                div()
+                    .absolute()
+                    .left(px(12.))
+                    .bottom(px(12.))
+                    .h(px(20.))
+                    .max_w(vw - px(24.))
+                    .px(px(7.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(5.))
+                    .bg(c.inline_bg)
+                    .text_size(px(11.))
+                    .text_color(c.text2)
+                    .font(ui_font())
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(address)
             }))
             .children(status.map(|text| {
                 div()
@@ -1242,7 +1556,48 @@ impl Render for Editor {
 }
 
 impl Editor {
+    /// The soft edge text scrolls under at the page's top. Blur isn't available
+    /// here, so this is the Swift band's wash alone; on Glass it would need the
+    /// page color, which Glass has none of, so there's no band.
+    fn fade_band(&self) -> Option<Div> {
+        let c = t();
+        if c.glass {
+            return None;
+        }
+        let top = linear_color_stop(c.page_content.opacity(0.8), 0.);
+        let bottom = linear_color_stop(c.page_content.opacity(0.), 1.);
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .h(px(30.))
+                .bg(linear_gradient(180., top, bottom)),
+        )
+    }
+
+    /// Notes scrolling, for the scroller: it shows while moving, then hides.
+    fn note_scroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let top = self.list.logical_scroll_top();
+        let now = (top.item_ix, f32::from(top.offset_in_item));
+        if now != self.last_scroll_top {
+            self.last_scroll_top = now;
+            self.scrolled_at = Some(Instant::now());
+            let _ = window;
+            cx.spawn(async move |this: WeakEntity<Editor>, cx| {
+                cx.background_executor().timer(Duration::from_millis(1100)).await;
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
+    }
+
     fn scroll_thumb(&self) -> Option<(Pixels, Pixels)> {
+        let recently = self.scrolled_at.is_some_and(|t| t.elapsed() < Duration::from_millis(1000));
+        if !recently && !self.thumb_hover && self.thumb_drag.is_none() {
+            return None;
+        }
         // By item index, because the list only knows the heights it has laid
         // out and a pixel-based thumb would wander as it learns more.
         let view = self.list.viewport_bounds().size.height;
@@ -1254,7 +1609,7 @@ impl Editor {
         if shown >= count {
             return None;
         }
-        let height = (view * (shown as f32 / count as f32)).max(px(24.));
+        let height = (view * (shown as f32 / count as f32)).max(px(28.));
         let at = self.list.logical_scroll_top().item_ix as f32 / (count - shown) as f32;
         Some(((view - height) * at.clamp(0., 1.), height))
     }
@@ -1316,6 +1671,7 @@ impl EntityInputHandler for Editor {
         if composing {
             self.can_coalesce = false;
         }
+        self.schedule_after_edit(cx);
         cx.notify();
     }
 
@@ -1340,6 +1696,7 @@ impl EntityInputHandler for Editor {
             self.anchor = self.doc.byte_of_utf16(base + sel.start);
             self.head = self.doc.byte_of_utf16(base + sel.end);
         }
+        self.schedule_after_edit(cx);
         cx.notify();
     }
 

@@ -260,8 +260,9 @@ pub struct DisplayLine {
     pub boxed: Option<BoxDeco>,
     /// Icon type and color, drawn at the box's top-left corner.
     pub callout_icon: Option<(String, Hsla)>,
-    /// The language of a code block, drawn top-right on its first line.
-    pub code_language: Option<SharedString>,
+    /// The language of a code block, and how far above this line's text top the
+    /// label's top sits. Drawn at the box's top right.
+    pub code_language: Option<(SharedString, f32)>,
     pub links: Vec<(Range<usize>, Link)>,
     pub centered: bool,
     pub wrap: bool,
@@ -857,6 +858,7 @@ pub struct LineCtx<'a> {
     pub real: bool,
     /// For a table or `$$` line opened for editing.
     pub raw_block: bool,
+    pub prev_has_caret: bool,
 }
 
 fn is_spaced_block(kind: Kind) -> bool {
@@ -1168,6 +1170,11 @@ pub fn build_line(src: &str, cx: &LineCtx) -> DisplayLine {
                 first: cx.kind == Kind::FenceOpen,
                 last: cx.kind == Kind::FenceClose,
             });
+            // The label reaches below the collapsed opening fence, and each line
+            // paints over the one before, so the line after it draws the label.
+            if cx.kind != Kind::FenceOpen && cx.prev == Kind::FenceOpen && !cx.prev_has_caret && !cx.block_type.is_empty() {
+                code_language = Some((cx.block_type.to_string().into(), BLOCK_PADDING - 7. + 6. + 0.));
+            }
             match cx.kind {
                 Kind::FenceBody => highlight_code(&mut st, cx.block_type),
                 _ => {
@@ -1176,8 +1183,8 @@ pub fn build_line(src: &str, cx: &LineCtx) -> DisplayLine {
                         // Collapsed syntax leaves only the line's spacing.
                         metric = LineMetric::Fixed(6.);
                     }
-                    if !cx.block_type.is_empty() && cx.kind == Kind::FenceOpen {
-                        code_language = Some(cx.block_type.to_string().into());
+                    if !cx.block_type.is_empty() && cx.kind == Kind::FenceOpen && caret_here {
+                        code_language = Some((cx.block_type.to_string().into(), 3.));
                     }
                 }
             }
@@ -1695,6 +1702,7 @@ mod tests {
                 links: None,
                 real: true,
                 raw_block: false,
+                prev_has_caret: false,
             },
         )
     }

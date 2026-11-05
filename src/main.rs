@@ -48,7 +48,13 @@ fn main() {
                 },
                 move |window, cx| {
                     let path = path.clone();
-                    let view = cx.new(move |cx| Editor::new(bytes, path, blink, cx));
+                    let view = cx.new(move |cx| {
+                        let mut e = Editor::new(bytes, path, blink, cx);
+                        if let Some(line) = std::env::var("FUMI_START_LINE").ok().and_then(|v| v.parse().ok()) {
+                            e.scroll_to_line(line, cx);
+                        }
+                        e
+                    });
                     window.focus(&view.read(cx).focus.clone(), cx);
                     view
                 },
