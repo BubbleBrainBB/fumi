@@ -1,0 +1,39 @@
+--- load: { 34.90 19.28 17.62 }
+=== type 200k rc=0
+OPEN bytes=200112 lines=2045 items=1846 | launch-to-first-paint=319.4ms read+init=176.6ms rope=0.28ms scan=0.58ms first-draw=0.6ms
+RESULT type: n=100 failed=0 | main-thread busy p50=1.34 p95=2.53 max=5.18 | draw p50=0.65 p95=1.07 | edit-handler p50=0.058 | event-to-painted p50=2.46 p95=5.81 ms
+CHECK undo restored the original bytes: true (1 undos)
+MEMORY footprint=343MB peak=343MB
+--- load: { 41.16 20.84 18.18 }
+=== enter 200k rc=0
+OPEN bytes=200112 lines=2045 items=1846 | launch-to-first-paint=393.5ms read+init=230.0ms rope=0.27ms scan=0.49ms first-draw=0.6ms
+RESULT enter: n=40 failed=0 | main-thread busy p50=1.25 p95=3.30 max=27.00 | draw p50=0.53 p95=1.90 | edit-handler p50=0.088 | event-to-painted p50=1.05 p95=4.16 ms
+CHECK undo restored the original bytes: true (40 undos)
+MEMORY footprint=59MB peak=286MB
+--- load: { 40.26 20.99 18.25 }
+=== scroll 200k rc=0
+OPEN bytes=200112 lines=2045 items=1846 | launch-to-first-paint=350.3ms read+init=217.7ms rope=0.28ms scan=0.46ms first-draw=0.7ms
+RESULT scroll: 688 wheel events, item 0->203 of 1846, 0 frames in 6.1s (0 fps) | draw>16.7ms=0 draw p50=0.00 p95=0.00 max=0.00 | main-thread stretches>16.7ms=0 longest=0.3 | missed vsync (gap>25ms)=0 longest gap=0.0 | busy 1%
+CHECK scroll moved: true
+MEMORY footprint=53MB peak=280MB
+--- load: { 38.48 20.94 18.25 }
+=== type 1m rc=0
+OPEN bytes=1000072 lines=10813 items=9518 | launch-to-first-paint=353.0ms read+init=209.5ms rope=1.29ms scan=2.15ms first-draw=0.7ms
+RESULT type: n=100 failed=0 | main-thread busy p50=2.37 p95=3.72 max=5.35 | draw p50=1.20 p95=2.10 | edit-handler p50=0.067 | event-to-painted p50=1.98 p95=4.48 ms
+CHECK undo restored the original bytes: true (1 undos)
+MEMORY footprint=120MB peak=346MB
+--- load: { 36.36 20.79 18.21 }
+=== enter 1m rc=0
+OPEN bytes=1000072 lines=10813 items=9518 | launch-to-first-paint=347.3ms read+init=206.8ms rope=1.26ms scan=1.99ms first-draw=0.7ms
+RESULT enter: n=40 failed=0 | main-thread busy p50=2.94 p95=6.41 max=11.90 | draw p50=0.47 p95=0.84 | edit-handler p50=0.135 | event-to-painted p50=3.73 p95=7.93 ms
+CHECK undo restored the original bytes: true (40 undos)
+MEMORY footprint=125MB peak=349MB
+2026-11-05 16:45:24.085 FumiGPUI[66260:64321740] TSM AdjustCapsLockLEDForKeyTransitionHandling - _ISSetPhysicalKeyboardCapsLockLED Inhibit
+2026-11-05 16:45:24.113 FumiGPUI[66260:64321740] error messaging the mach port for IMKCFRunLoopWakeUpReliable
+--- load: { 36.65 21.11 18.34 }
+=== scroll 1m rc=0
+OPEN bytes=1000072 lines=10813 items=9518 | launch-to-first-paint=319.2ms read+init=186.5ms rope=1.26ms scan=2.07ms first-draw=0.7ms
+RESULT scroll: 686 wheel events, item 0->203 of 9518, 38 frames in 6.1s (6 fps) | draw>16.7ms=0 draw p50=0.48 p95=1.51 max=2.48 | main-thread stretches>16.7ms=1 longest=22.7 | missed vsync (gap>25ms)=0 longest gap=18.8 | busy 3%
+CHECK scroll moved: true
+MEMORY footprint=119MB peak=345MB
+DONE

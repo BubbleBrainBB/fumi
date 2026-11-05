@@ -1,0 +1,2 @@
+2026-11-05 06:21:17.202 spike_glass[67471:59943918] TSM AdjustCapsLockLEDForKeyTransitionHandling - _ISSetPhysicalKeyboardCapsLockLED Inhibit
+2026-11-05 06:21:17.216 spike_glass[67471:59943918] error messaging the mach port for IMKCFRunLoopWakeUpReliable

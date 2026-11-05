@@ -1,0 +1,6 @@
+# HTTP/2 multiplexing through the local proxy fails with SSL errors.
+[http]
+multiplexing = false
+
+[net]
+retry = 5

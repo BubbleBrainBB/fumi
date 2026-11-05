@@ -1,14 +1,12 @@
 # macOS
 .DS_Store
 
-# Xcode
-/build/
-DerivedData/
-xcuserdata/
-*.xcuserstate
+# Rust
+target/
+*.log
 
 # Local tool state
 .workbuddy/
 
-# Build inputs for the bundled WeChat renderer (npm install in Tools/wechat-renderer)
-/Tools/wechat-renderer/node_modules/
+# Build inputs for the bundled WeChat renderer (npm install in tools/wechat-renderer)
+/tools/wechat-renderer/node_modules/

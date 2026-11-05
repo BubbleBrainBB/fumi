@@ -1,0 +1,3 @@
+=== goto visual rc=0
+OPEN bytes=580 lines=39 items=34 | launch-to-first-paint=348.6ms read+init=211.4ms rope=0.00ms scan=0.03ms first-draw=0.2ms
+MEMORY footprint=283MB peak=283MB

@@ -1,0 +1,4 @@
+=== goto 1m rc=0
+OPEN bytes=1000072 lines=10813 items=9521 | launch-to-first-paint=384.2ms read+init=227.9ms rope=1.33ms scan=0.40ms first-draw=0.2ms
+MEMORY footprint=281MB peak=281MB
+2026-11-05 05:22:59.290 FumiGPUI[71862:59324759] TSM AdjustCapsLockLEDForKeyTransitionHandling - _ISSetPhysicalKeyboardCapsLockLED Inhibit

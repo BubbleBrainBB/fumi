@@ -1,0 +1,3 @@
+2026-11-05 06:33:42.540 spike_web[15893:60051293] ApplePersistenceIgnoreState: Existing state will not be touched. New state will be written to /var/folders/jq/dnm9961166d8bfyv8_stgd140000gn/T/com.fumi.gpui-spike.savedState
+2026-11-05 06:33:57.522 spike_web[15893:60051293] TSM AdjustCapsLockLEDForKeyTransitionHandling - _ISSetPhysicalKeyboardCapsLockLED Inhibit
+2026-11-05 06:34:33.902 spike_web[15893:60051293] error messaging the mach port for IMKCFRunLoopWakeUpReliable

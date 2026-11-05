@@ -1,0 +1,13 @@
+--- load: { 33.52 20.96 18.32 }
+=== scroll 200k rc=0
+OPEN bytes=200112 lines=2045 items=1846 | launch-to-first-paint=363.5ms read+init=203.1ms rope=0.28ms scan=0.46ms first-draw=0.6ms
+RESULT scroll: 683 wheel events, item 0->202 of 1846, 23 frames in 6.1s (4 fps) | draw>16.7ms=0 draw p50=0.94 p95=4.20 max=7.63 | main-thread stretches>16.7ms=1 longest=25.0 | missed vsync (gap>25ms)=0 longest gap=16.8 | busy 3%
+CHECK scroll moved: true
+MEMORY footprint=121MB peak=349MB
+--- load: { 33.56 21.41 18.51 }
+=== scroll 1m rc=0
+OPEN bytes=1000072 lines=10813 items=9518 | launch-to-first-paint=347.8ms read+init=208.0ms rope=1.19ms scan=1.96ms first-draw=0.7ms
+RESULT scroll: 677 wheel events, item 0->194 of 9518, 95 frames in 6.1s (16 fps) | draw>16.7ms=0 draw p50=0.56 p95=2.14 max=13.80 | main-thread stretches>16.7ms=3 longest=57.0 | missed vsync (gap>25ms)=0 longest gap=21.3 | busy 5%
+CHECK scroll moved: true
+MEMORY footprint=121MB peak=349MB
+DONE
