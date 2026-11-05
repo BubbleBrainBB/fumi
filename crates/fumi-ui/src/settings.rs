@@ -30,7 +30,13 @@ fn from_ns(s: id) -> Option<String> {
 }
 
 fn object(key: &str) -> id {
-    unsafe { msg_send![defaults(), objectForKey: ns(key)] }
+    // Read while drawing, so the key must not outlive the call.
+    unsafe {
+        let key = ns(key);
+        let value: id = msg_send![defaults(), objectForKey: key];
+        let _: () = msg_send![key, release];
+        value
+    }
 }
 
 pub fn has(key: &str) -> bool {

@@ -6,10 +6,16 @@ license = "MIT"
 
 [dependencies]
 fumi-core = { path = "../fumi-core" }
+fumi-editor = { path = "../fumi-editor" }
 fumi-ui = { path = "../fumi-ui" }
 fumi-workspace = { path = "../fumi-workspace" }
 gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false }
 smallvec = "1"
+unicode-segmentation = "1"
+objc = "0.2"
+cocoa = "0.26"
+block = "0.1"
+futures = "0.3"
 
 [dev-dependencies]
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", default-features = false, features = ["font-kit", "runtime_shaders"] }

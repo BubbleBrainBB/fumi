@@ -291,6 +291,7 @@ fn rasterize(glyph: Glyph, size: f32, color: Hsla) -> Option<Arc<RenderImage>> {
 
 /// A Fumi glyph as a template `NSImage`, for the menu bar: AppKit tints it.
 /// The caller owns the image.
+#[allow(deprecated)]
 pub fn template_image(g: Glyph, size: f32) -> cocoa::base::id {
     use cocoa::base::{id, nil};
     use cocoa::foundation::NSSize;
