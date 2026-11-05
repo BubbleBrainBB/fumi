@@ -7,6 +7,8 @@ pub mod native;
 pub mod settings;
 pub mod text_field;
 pub mod theme;
+pub mod window_frame;
+pub mod fonts;
 pub mod fsevents;
 pub mod icons;
 

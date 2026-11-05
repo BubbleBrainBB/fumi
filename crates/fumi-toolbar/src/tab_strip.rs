@@ -6,7 +6,7 @@ use crate::labels;
 use crate::layout::{self, FLARE, LABEL_HEIGHT, TAB_HEIGHT, TAB_RADIUS};
 use crate::menu_rows::MenuSpec;
 use crate::tip::{tip, tip_with};
-use crate::toolbar::{Toolbar, edited, multiply};
+use crate::toolbar::{Toolbar, edited};
 use fumi_core::tabs::{Content, NoteTab};
 use fumi_ui::icons::{glyph, symbol};
 use fumi_ui::theme::{t, text_size};
@@ -118,7 +118,7 @@ impl Toolbar {
         self.popup(menu, position, window, cx, |this, id, _, cx| this.nav(cx, |w| w.model.select_tab(&id)));
     }
 
-    pub(crate) fn render_strip(&mut self, width: f32, shade: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_strip(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let now = Instant::now();
         let c = t();
         let (tabs, active_id) = {
@@ -167,7 +167,7 @@ impl Toolbar {
         let count = tabs.len();
         let mut children: Vec<AnyElement> = Vec::with_capacity(count);
         for (index, tab) in tabs.iter().enumerate() {
-            children.push(self.paper_tab_element(tab, drawn[index], index == active, hovered == Some(index), layout::shows_separator(index, count, active, hovered), shade, cx));
+            children.push(self.paper_tab_element(tab, drawn[index], index == active, hovered == Some(index), layout::shows_separator(index, count, active, hovered), cx));
         }
 
         let inner = div().relative().flex_none().w(px(content)).h(px(layout::BAND_HEIGHT)).children(children);
@@ -180,15 +180,15 @@ impl Toolbar {
 
         let fade = layout.overflows.then(|| {
             // The tabs fade out at the trailing edge. GPUI has no masks: this paints
-            // the ground over them instead.
-            let ground = c.window_ground;
+            // the ground over them instead, as see-through as the ground itself.
+            let ground = c.ground_fill;
             div()
                 .absolute()
                 .right_0()
                 .top_0()
                 .h_full()
                 .w(relative(0.06))
-                .bg(linear_gradient(90., linear_color_stop(ground.opacity(0.), 0.), linear_color_stop(multiply(ground, shade), 1.)))
+                .bg(linear_gradient(90., linear_color_stop(ground.opacity(0.), 0.), linear_color_stop(ground, 1.)))
         });
 
         let drag_slots = slots.clone();
@@ -261,7 +261,7 @@ impl Toolbar {
                         this.all_tabs_menu(&menu_tabs, &menu_active, position, window, cx);
                     }),
                 )
-                .child(symbol("chevron.down", 11., 0.3, multiply(c.text2, shade)))
+                .child(symbol("chevron.down", 11., 0.3, c.text2))
         });
 
         div()
@@ -282,7 +282,6 @@ impl Toolbar {
         is_active: bool,
         is_hovered: bool,
         separator: bool,
-        shade: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let c = t();
@@ -292,7 +291,7 @@ impl Toolbar {
         let width = drawn.width;
 
         let label: AnyElement = if tab.is_pinned {
-            let icon_color = multiply(if is_active { c.text2 } else { c.icon }, shade);
+            let icon_color = if is_active { c.text2 } else { c.icon };
             div()
                 .w_full()
                 .h(px(LABEL_HEIGHT))
@@ -301,7 +300,7 @@ impl Toolbar {
                 .gap(px(3.))
                 .pl(px(9.))
                 .child(glyph(labels::tab_glyph(&tab.content, kind), 15., icon_color))
-                .child(symbol("pin.fill", 8., 0.3, multiply(c.icon, shade)))
+                .child(symbol("pin.fill", 8., 0.3, c.icon))
                 .into_any_element()
         } else {
             let ink = if is_active {
@@ -322,7 +321,7 @@ impl Toolbar {
                         .font(self.title_font.clone())
                         .text_size(px(text_size::BODY))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(multiply(ink, shade))
+                        .text_color(ink)
                         .when(is_draft, |el| el.italic())
                         .truncate()
                         .child(title.clone()),
@@ -331,8 +330,8 @@ impl Toolbar {
         };
 
         let background: Option<AnyElement> = if is_active {
-            let fill = multiply(c.page_sheet, shade);
-            let edge = multiply(c.page_edge, shade);
+            let fill = c.page_sheet;
+            let edge = c.page_edge;
             let glass = c.glass;
             let shape_width = width + FLARE * 2.;
             let lift = glass.then(|| {
@@ -389,7 +388,7 @@ impl Toolbar {
                     .w(px(width))
                     .h(px(TAB_HEIGHT))
                     .rounded_t(px(TAB_RADIUS))
-                    .bg(multiply(c.text.opacity(0.04), shade))
+                    .bg(c.text.opacity(0.04))
                     .into_any_element(),
             )
         } else {
@@ -403,12 +402,12 @@ impl Toolbar {
                 .top(px((LABEL_HEIGHT - 14.) / 2.))
                 .w(px(1.))
                 .h(px(14.))
-                .bg(multiply(c.text.opacity(0.16), shade))
+                .bg(c.text.opacity(0.16))
         });
 
         let close = shows_close.then(|| {
             let hovering = self.hovered_close.as_deref() == Some(tab.id.as_str());
-            let ink = multiply(if hovering { c.text } else { c.icon }, shade);
+            let ink = if hovering { c.text } else { c.icon };
             let (hover_id, close_id) = (tab.id.clone(), tab.id.clone());
             div()
                 .id(SharedString::from(format!("close-{}", tab.id)))
@@ -421,7 +420,7 @@ impl Toolbar {
                 .items_center()
                 .justify_center()
                 .rounded(px(4.))
-                .when(hovering, |el| el.bg(multiply(c.text.opacity(0.10), shade)))
+                .when(hovering, |el| el.bg(c.text.opacity(0.10)))
                 .tooltip(tip("Close Tab (⌘W)"))
                 .on_hover(cx.listener(move |this, hovering: &bool, _, cx| {
                     if *hovering {

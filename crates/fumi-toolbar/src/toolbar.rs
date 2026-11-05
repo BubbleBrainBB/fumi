@@ -15,7 +15,7 @@ use fumi_core::app_model::PublishTarget;
 use fumi_core::attachment_import;
 use fumi_core::tabs::{Content, NoteTab};
 use fumi_ui::icons::{Glyph, glyph, symbol};
-use fumi_ui::theme::{self, t, text_size};
+use fumi_ui::theme::{t, text_size};
 use fumi_ui::{native, settings};
 use fumi_workspace::{Workspace, libraries, local_utc_offset, now as clock_now};
 use gpui::prelude::*;
@@ -24,7 +24,6 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
 
 /// The open note's text as typed, for the Info popover's counts. Root provides it,
 /// since this crate doesn't know the editor.
@@ -102,24 +101,7 @@ pub(crate) fn edited(updated_at: f64) -> String {
 
 /// The face of the page's body, for titles.
 pub(crate) fn body_font() -> Font {
-    let name = settings::editor_font();
-    let family: String = match name.as_str() {
-        "System" | "" => ".SystemUIFont".into(),
-        "SF Mono" => "Menlo".into(),
-        other => other.into(),
-    };
-    let mut f = font(family);
-    f.fallbacks = Some(FontFallbacks::from_fonts(vec!["PingFang SC".into()]));
-    f
-}
-
-/// Multiplies a color's channels, as `colorMultiply` does, alpha untouched.
-pub(crate) fn multiply(color: Hsla, shade: f32) -> Hsla {
-    if shade >= 1. {
-        return color;
-    }
-    let rgba = Rgba::from(color);
-    Hsla::from(Rgba { r: rgba.r * shade, g: rgba.g * shade, b: rgba.b * shade, a: rgba.a })
+    fumi_ui::fonts::family_font(&settings::editor_font())
 }
 
 struct InfoCard {
@@ -137,9 +119,6 @@ pub struct Toolbar {
     pub(crate) band: Rc<Cell<Bounds<Pixels>>>,
     /// The page's body face, read once a frame.
     pub(crate) title_font: Font,
-    /// False when root's scrim covers the band too.
-    pub dims_with_window: bool,
-    dim: Tween,
     pub(crate) hovered_tab: Option<String>,
     pub(crate) hovered_close: Option<String>,
     pub(crate) motion: layout::TabMotion,
@@ -150,6 +129,8 @@ pub struct Toolbar {
     pub(crate) tab_titles: HashMap<Content, (String, Option<fumi_core::note::FileKind>)>,
     pub(crate) titles_revision: u64,
     moving_window: bool,
+    /// What `NSWindow.subtitle` says now.
+    window_subtitle: String,
     info: Option<InfoCard>,
     info_focus: FocusHandle,
     info_return_focus: Option<FocusHandle>,
@@ -180,8 +161,6 @@ impl Toolbar {
             live_text: None,
             band: Rc::new(Cell::new(Bounds::new(point(px(0.), px(0.)), size))),
             title_font: body_font(),
-            dims_with_window: true,
-            dim: Tween::settled(0.),
             hovered_tab: None,
             hovered_close: None,
             motion: layout::TabMotion::default(),
@@ -192,6 +171,7 @@ impl Toolbar {
             tab_titles: HashMap::new(),
             titles_revision: 0,
             moving_window: false,
+            window_subtitle: String::new(),
             info: None,
             info_focus: cx.focus_handle(),
             info_return_focus: None,
@@ -409,11 +389,10 @@ impl Toolbar {
         icon: Glyph,
         ink: Hsla,
         help: String,
-        shade: f32,
     ) -> Stateful<Div> {
         let c = t();
-        let hover = multiply(if c.glass { c.page.opacity(0.75) } else { c.text.opacity(0.05) }, shade);
-        let press = multiply(c.text.opacity(0.09), shade);
+        let hover = if c.glass { c.page.opacity(0.75) } else { c.text.opacity(0.05) };
+        let press = c.text.opacity(0.09);
         let mut button = div()
             .id(id)
             .w(px(36.))
@@ -428,7 +407,7 @@ impl Toolbar {
             .child(glyph(icon, 18., ink));
         if c.glass {
             // Stands in for macOS 26's glass capsule: a translucent fill and a hairline.
-            button = button.bg(multiply(c.page_sheet, shade)).border_1().border_color(multiply(c.page_edge, shade));
+            button = button.bg(c.page_sheet).border_1().border_color(c.page_edge);
         }
         button
     }
@@ -438,7 +417,6 @@ impl Toolbar {
         tab: &NoteTab,
         title: String,
         subtitle: String,
-        shade: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let c = t();
@@ -479,7 +457,7 @@ impl Toolbar {
                                 .id("lone-pin")
                                 .flex_none()
                                 .tooltip(tip("Pinned"))
-                                .child(symbol("pin.fill", 9., 0.3, multiply(c.faint_text, shade))),
+                                .child(symbol("pin.fill", 9., 0.3, c.faint_text)),
                         )
                     })
                     .child(
@@ -488,7 +466,7 @@ impl Toolbar {
                             .font(self.title_font.clone())
                             .text_size(px(text_size::BODY))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(multiply(c.text2, shade))
+                            .text_color(c.text2)
                             .truncate()
                             .child(title),
                     ),
@@ -497,7 +475,7 @@ impl Toolbar {
                 block.child(
                     div()
                         .text_size(px(text_size::CAPTION))
-                        .text_color(multiply(c.faint_text, shade))
+                        .text_color(c.faint_text)
                         .truncate()
                         .child(subtitle),
                 )
@@ -641,12 +619,11 @@ fn tracked(text: &'static str, tracking: f32) -> impl IntoElement {
 impl Render for Toolbar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = t();
-        let now = Instant::now();
         let (wechat, xhs) = (extension_wechat(), extension_xhs());
         let any_extension = wechat || xhs;
         self.title_font = body_font();
 
-        let (tab, kind, strip, title, subtitle, preview_open, scrim) = {
+        let (tab, kind, strip, title, subtitle, preview_open) = {
             let w = self.workspace.read(cx);
             let tab = w.model.active_tab().clone();
             let (note_found, file) = match &tab.content {
@@ -686,11 +663,14 @@ impl Render for Toolbar {
                 title,
                 subtitle,
                 w.model.is_preview_open(),
-                w.model.scrim_strength(c.glass),
             )
         };
 
         window.set_window_title(&title);
+        if self.window_subtitle != subtitle {
+            native::set_window_subtitle(native::ns_window_of(window), &subtitle);
+            self.window_subtitle = subtitle.clone();
+        }
         // Settings change the extensions without a word to the workspace.
         self.sync_menus(window, cx);
 
@@ -699,29 +679,19 @@ impl Render for Toolbar {
             self.close_info(window, cx);
         }
 
-        // Dims with the window behind search and Settings, in steps so the images
-        // of its icons stay few.
-        self.dim.go(if self.dims_with_window { scrim } else { 0. }, Duration::from_millis(160), now);
-        if self.dim.is_moving(now) {
-            window.request_animation_frame();
-        }
-        let shade = (theme::scrim_shade(self.dim.value(now), c.dark) * 32.).round() / 32.;
-
         let band = self.band.get();
         let band_left = f32::from(band.left());
-        let page_left = band_left + layout::PAGE_INSET;
-        let page_width = f32::from(band.size.width) - layout::PAGE_INSET * 2.;
-        let strip_width = layout::strip_width(page_left, page_width, any_extension);
-        let lead = layout::leading_x(page_left) - band_left;
+        let strip_width = layout::strip_width(band_left, f32::from(band.size.width), any_extension);
+        let lead = layout::leading_x(band_left + layout::PAGE_INSET) - band_left;
 
         let leading: AnyElement = if strip {
-            self.render_strip(strip_width, shade, window, cx)
+            self.render_strip(strip_width, window, cx)
         } else {
             self.motion.reset();
             self.last_active = None;
             self.hovered_tab = None;
             self.hovered_close = None;
-            let block = (!title.is_empty()).then(|| self.title_block(&tab, title, subtitle, shade, cx));
+            let block = (!title.is_empty()).then(|| self.title_block(&tab, title, subtitle, cx));
             div()
                 .h_full()
                 .flex()
@@ -732,7 +702,7 @@ impl Render for Toolbar {
                 .into_any_element()
         };
 
-        let ink = multiply(c.text, shade);
+        let ink = c.text;
         let mut icons: Vec<AnyElement> = Vec::new();
         let cell = |button: AnyElement| {
             div().w(px(layout::ICON_CELL)).h_full().flex().items_center().justify_center().child(button).into_any_element()
@@ -742,16 +712,16 @@ impl Render for Toolbar {
             cx.stop_propagation();
         };
         if matches!(kind, PageKind::Note(_)) && any_extension {
-            let preview_ink = if preview_open { multiply(c.accent, shade) } else { ink };
+            let preview_ink = if preview_open { c.accent } else { ink };
             let button = self
-                .icon_button("toolbar-preview", Glyph::Phone, preview_ink, labels::preview_tip(wechat, xhs, preview_open), shade)
+                .icon_button("toolbar-preview", Glyph::Phone, preview_ink, labels::preview_tip(wechat, xhs, preview_open))
                 .on_mouse_down(MouseButton::Left, stop)
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_preview(cx)));
             icons.push(cell(button.into_any_element()));
         }
         if !matches!(kind, PageKind::Memos) {
             let button = self
-                .icon_button("toolbar-new-note", Glyph::NewNote, ink, "New Note (⌘N)".to_string(), shade)
+                .icon_button("toolbar-new-note", Glyph::NewNote, ink, "New Note (⌘N)".to_string())
                 .on_mouse_down(MouseButton::Left, stop)
                 .on_click(cx.listener(|this, _, _, cx| this.nav(cx, |w| w.model.new_tab())));
             icons.push(cell(button.into_any_element()));
@@ -759,13 +729,13 @@ impl Render for Toolbar {
         if let PageKind::Note(id) = &kind {
             let info_id = id.clone();
             let button = self
-                .icon_button("toolbar-info", Glyph::Info, ink, "Note Info".to_string(), shade)
+                .icon_button("toolbar-info", Glyph::Info, ink, "Note Info".to_string())
                 .on_mouse_down(MouseButton::Left, stop)
                 .on_click(cx.listener(move |this, _, window, cx| this.toggle_info(&info_id, window, cx)));
             icons.push(cell(button.into_any_element()));
             let more_id = id.clone();
             let button = self
-                .icon_button("toolbar-more", Glyph::More, ink, "More".to_string(), shade)
+                .icon_button("toolbar-more", Glyph::More, ink, "More".to_string())
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _: &MouseDownEvent, window, cx| {
@@ -780,7 +750,7 @@ impl Render for Toolbar {
         } else if let PageKind::File(id) = &kind {
             let more_id = id.clone();
             let button = self
-                .icon_button("toolbar-more", Glyph::More, ink, "More".to_string(), shade)
+                .icon_button("toolbar-more", Glyph::More, ink, "More".to_string())
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _: &MouseDownEvent, window, cx| {
@@ -872,12 +842,4 @@ mod tests {
         assert_eq!(choose_target(true, true, saved, Some("/b.md")), PublishTarget::Wechat);
     }
 
-    #[core::prelude::v1::test]
-    fn multiply_darkens_and_keeps_alpha() {
-        let white = hsla(0., 0., 1., 0.5);
-        let dim = multiply(white, 0.84);
-        assert!((dim.l - 0.84).abs() < 0.01);
-        assert!((dim.a - 0.5).abs() < 0.001);
-        assert_eq!(multiply(white, 1.), white);
-    }
 }

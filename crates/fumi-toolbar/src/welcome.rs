@@ -425,8 +425,7 @@ impl Welcome {
                 .child(div().text_size(px(text_size::CAPTION)).text_color(c.faint_text).child("Waiting for the disk…"))
         });
 
-        let mut title_font = font("New York");
-        title_font.fallbacks = Some(FontFallbacks::from_fonts(vec!["PingFang SC".into()]));
+        let title_font = fumi_ui::fonts::family_font("New York");
 
         div()
             .w(px(420.))

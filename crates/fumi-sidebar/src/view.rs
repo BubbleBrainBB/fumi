@@ -12,7 +12,7 @@ use fumi_ui::icons::{self, Glyph};
 use fumi_ui::native;
 use fumi_ui::settings;
 use fumi_ui::text_field::{FieldEvent, TextField};
-use fumi_ui::theme::t;
+use fumi_ui::theme::{self, t};
 use fumi_workspace::{Workspace, libraries};
 use gpui::prelude::*;
 use gpui::*;
@@ -927,7 +927,7 @@ impl SidebarView {
     /// is there or not.
     fn toggle_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let c = t();
-        let shade = 1. - if c.dark { 0.45 } else { 0.16 } * self.scrim;
+        let shade = theme::scrim_shade(self.scrim, c.dark);
         let help = if self.shown { "Hide Sidebar (⌥⌘S)" } else { "Show Sidebar (⌥⌘S)" };
         deferred(
             div()
@@ -1022,6 +1022,8 @@ impl Render for SidebarView {
 
         let dialog = self.render_dialog(window, cx);
         let capture = self.pointer_capture(cx);
+        // Drawn last, it would stand in the way of search and Settings over it.
+        let scrimmed = self.scrim > 0. || self.workspace.read(cx).model.scrim_strength(t().glass) > 0.;
         div()
             .id("sidebar")
             .relative()
@@ -1035,7 +1037,7 @@ impl Render for SidebarView {
                     .child(div().absolute().left_0().right_0().top_0().h(px(BAND_HEIGHT)).window_control_area(WindowControlArea::Drag))
                     .child(levels)
             })
-            .when(self.shown && width > 0., |column| column.child(self.divider(width, cx)))
+            .when(self.shown && width > 0. && !scrimmed, |column| column.child(self.divider(width, cx)))
             .child(self.toggle_button(cx))
             .children(capture)
             .children(dialog)

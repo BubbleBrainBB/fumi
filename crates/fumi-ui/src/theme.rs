@@ -602,6 +602,13 @@ pub fn apply_from_settings(system_dark: bool) -> Tokens {
     tokens
 }
 
+/// A color `v` of the way from `a` to `b`.
+pub fn mix(a: Hsla, b: Hsla, v: f32) -> Hsla {
+    let (ca, cb) = (Rgba::from(a), Rgba::from(b));
+    let l = |x: f32, y: f32| x + (y - x) * v;
+    Hsla::from(Rgba { r: l(ca.r, cb.r), g: l(ca.g, cb.g), b: l(ca.b, cb.b), a: l(ca.a, cb.a) })
+}
+
 /// How strongly the window is dimmed behind a floating card, as a multiplier
 /// for what must look dimmed but sits above the scrim.
 pub fn scrim_shade(strength: f32, dark: bool) -> f32 {

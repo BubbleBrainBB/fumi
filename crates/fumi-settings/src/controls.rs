@@ -1,26 +1,13 @@
 //! What the sheet, the search panel and the welcome page are built from.
 
+use fumi_ui::fonts::family_font;
+pub use fumi_ui::theme::mix;
 use fumi_ui::theme::t;
 use gpui::prelude::*;
 use gpui::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-
-pub const CJK_FALLBACK: &str = "PingFang SC";
-
-/// A family by the name Settings stores: `WysiwygEngine.resolveFont`'s pins, then
-/// whatever is installed.
-pub fn family_font(family: &str) -> Font {
-    let name: String = match family {
-        "System" | "" => ".SystemUIFont".into(),
-        "SF Mono" => "Menlo".into(),
-        other => other.into(),
-    };
-    let mut f = font(name);
-    f.fallbacks = Some(FontFallbacks::from_fonts(vec![CJK_FALLBACK.into()]));
-    f
-}
 
 /// `.monospacedDigit()`.
 pub fn tabular_digits() -> FontFeatures {
@@ -209,13 +196,6 @@ pub fn text_width(text: &str, size: f32, window: &Window) -> f32 {
     };
     let line = window.text_system().shape_line(text.to_string().into(), px(size), &[run], None);
     f32::from(line.width)
-}
-
-/// `f` over `1 - v`, for a color at `v` of the way from `a` to `b`.
-pub fn mix(a: Hsla, b: Hsla, v: f32) -> Hsla {
-    let (ca, cb) = (Rgba::from(a), Rgba::from(b));
-    let l = |x: f32, y: f32| x + (y - x) * v;
-    Hsla::from(Rgba { r: l(ca.r, cb.r), g: l(ca.g, cb.g), b: l(ca.b, cb.b), a: l(ca.a, cb.a) })
 }
 
 #[cfg(test)]

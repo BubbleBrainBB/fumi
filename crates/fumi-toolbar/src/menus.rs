@@ -1,5 +1,7 @@
 //! The menu bar. What SwiftUI gives the Swift app for free, the app, Edit, Window
 //! and Help menus, is spelled out here, with Fumi's additions where they stand.
+//! `mac::polish_main_menu` adds the Edit rows that are only AppKit selectors; AppKit
+//! itself adds Fill, Center and Move & Resize to the menu it's told is Window.
 
 use crate::actions::*;
 use gpui::{Menu, MenuItem, OsAction, SystemMenuType};

@@ -23,10 +23,11 @@ pub const ICON_CELL: f32 = 44.;
 /// From the page's right edge to the last icon's cell.
 pub const ICON_TRAILING: f32 = 8.;
 
-/// The strip's width: the page's, less the trailing icons, the Preview icon when
-/// an extension is on, and the traffic lights where the page slides under them.
-pub fn strip_width(page_left: f32, page_width: f32, any_extension: bool) -> f32 {
-    let width = page_width - 164. - if any_extension { 44. } else { 0. } - (TRAFFIC_LIGHTS - page_left).max(0.);
+/// The strip's width: the detail column's (`pageFrame` is measured outside the
+/// page's inset), less the trailing icons, the Preview icon when an extension is
+/// on, and the traffic lights where the column slides under them.
+pub fn strip_width(column_left: f32, column_width: f32, any_extension: bool) -> f32 {
+    let width = column_width - 164. - if any_extension { 44. } else { 0. } - (TRAFFIC_LIGHTS - column_left).max(0.);
     width.max(240.)
 }
 
@@ -290,12 +291,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn strip_width_follows_the_page() {
-        assert_eq!(strip_width(248., 900., false), 736.);
-        assert_eq!(strip_width(248., 900., true), 692.);
-        // The sidebar hidden: the page slides under the traffic lights.
-        assert_eq!(strip_width(8., 1100., false), 812.);
-        assert_eq!(strip_width(8., 300., false), 240.);
+    fn strip_width_follows_the_column() {
+        assert_eq!(strip_width(240., 960., false), 796.);
+        assert_eq!(strip_width(240., 960., true), 752.);
+        // The sidebar hidden: the column slides under the traffic lights.
+        assert_eq!(strip_width(0., 1200., false), 904.);
+        assert_eq!(strip_width(0., 300., false), 240.);
         assert_eq!(leading_x(8.), 132.);
         assert_eq!(leading_x(248.), 248.);
     }

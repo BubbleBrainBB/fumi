@@ -144,8 +144,12 @@ impl Workspace {
             let scan_ticket = ticket.clone();
             let scan = cx.background_executor().spawn(async move { scan_ticket.scan(now().secs) }).await;
             let _ = this.update(cx, |w, cx| {
+                let was_loaded = w.store.has_loaded_notes();
                 let change = w.store.apply_reload(&ticket, scan);
-                if change.applied && (change.notes_changed || change.files_changed) {
+                // The first scan counts even if it found nothing: tabs of notes
+                // gone since last time close now.
+                let first_scan = !was_loaded && w.store.has_loaded_notes();
+                if change.applied && (change.notes_changed || change.files_changed || first_scan) {
                     w.library_changed(cx);
                 } else {
                     // An empty library still has to say it finished loading.

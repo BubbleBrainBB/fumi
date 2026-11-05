@@ -313,6 +313,32 @@ pub fn ns_window_of(window: &Window) -> id {
     }
 }
 
+/// `NSWindow.subtitle`: not drawn with a hidden title, but what Mission Control
+/// and assistive apps read.
+pub fn set_window_subtitle(window: id, subtitle: &str) {
+    if window != nil {
+        unsafe {
+            let text = ns(subtitle);
+            let _: () = msg_send![window, setSubtitle: text];
+            let _: () = msg_send![text, release];
+        }
+    }
+}
+
+/// How small the user can make the window's content.
+pub fn set_content_min_size(window: id, width: f64, height: f64) {
+    if window != nil {
+        unsafe {
+            let _: () = msg_send![window, setContentMinSize: NSSize::new(width, height)];
+        }
+    }
+}
+
+/// macOS 26 or later: Liquid Glass is there.
+pub fn has_liquid_glass() -> bool {
+    class_named("NSGlassEffectView").is_some()
+}
+
 const NS_WINDOW_BELOW: i64 = -1;
 const AUTORESIZE_FILL: u64 = 2 | 16;
 

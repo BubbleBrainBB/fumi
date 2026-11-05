@@ -7,7 +7,7 @@
 //! draw over a native view, so while search or Settings float above, the native
 //! view hides and a still of it takes its place.
 
-use crate::controls::family_font;
+use fumi_ui::fonts::family_font;
 use crate::mac;
 use cocoa::base::{id, nil};
 use cocoa::foundation::{NSRect, NSSize};

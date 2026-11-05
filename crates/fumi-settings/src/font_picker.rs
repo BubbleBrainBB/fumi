@@ -2,7 +2,8 @@
 //! list: `FontPicker` in `SettingsView.swift`.
 
 use crate::anim::Fades;
-use crate::controls::{Probes, chevron_down, family_font, hairline, mix};
+use crate::controls::{Probes, chevron_down, hairline, mix};
+use fumi_ui::fonts::family_font;
 use crate::mac;
 use crate::scroller::{ScrollTarget, Scroller};
 use fumi_ui::text_field::{FieldEvent, TextField};

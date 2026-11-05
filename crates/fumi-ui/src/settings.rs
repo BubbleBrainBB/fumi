@@ -162,6 +162,7 @@ pub mod keys {
     pub const XHS_END_LINE: &str = "fumi.xhs.endLine";
     pub const COLOR_THEME: &str = "fumi.colorTheme";
     pub const APPEARANCE_MODE: &str = "fumi.appearanceMode";
+    pub const WINDOW_FRAME: &str = "fumi.windowFrame";
 }
 
 pub fn color_theme() -> AppTheme {

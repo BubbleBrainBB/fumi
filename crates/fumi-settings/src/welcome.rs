@@ -6,7 +6,8 @@
 
 use crate::WelcomeDefault;
 use crate::anim::{Fades, Transition};
-use crate::controls::{family_font, folder_glyph};
+use crate::controls::folder_glyph;
+use fumi_ui::fonts::family_font;
 use crate::mac;
 use fumi_ui::icons::{Glyph, glyph, symbol};
 use fumi_ui::native;
@@ -187,9 +188,18 @@ impl WelcomePage {
         }
     }
 
-    /// The root calls this when the page shows again, so ↩ reaches it.
+    /// So ↩ reaches the page.
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
         window.focus(&self.focus, cx);
+    }
+
+    /// The root calls this when the page shows again: it fades in anew, as a new
+    /// `FolderOpenView` does, and takes the keyboard.
+    pub fn shown_again(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.appeared = Transition::new(false, 0.2);
+        self.appeared.set(true, Instant::now());
+        self.focus(window, cx);
+        cx.notify();
     }
 
     /// A newly mounted disk with the missing folder on it opens it.

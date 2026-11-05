@@ -425,7 +425,6 @@ impl SearchPanel {
             .px(px(12.))
             .py(px(7.))
             .rounded(px(7.))
-            .cursor_pointer()
             .when(selected, |d| d.bg(c.accent_selected))
             .when(!selected && hovering, |d| d.bg(c.card_hover))
             .on_hover(cx.listener(move |this, hovering: &bool, _, cx| {
@@ -697,7 +696,7 @@ impl Render for SearchPanel {
             .flex_col()
             .items_center()
             .pt(px(PANEL_TOP))
-            .font(crate::controls::family_font("System"))
+            .font(fumi_ui::fonts::family_font("System"))
             .on_click(cx.listener(|this, _, _, cx| this.dismiss(cx)))
             .child(panel)
             .into_any_element()

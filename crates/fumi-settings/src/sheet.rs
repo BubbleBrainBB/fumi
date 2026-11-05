@@ -5,7 +5,8 @@
 
 use crate::CloseSettings;
 use crate::anim::{Fades, Transition};
-use crate::controls::{Probes, chevron_down, disclosure, family_font, hairline, mix, tabular_digits, text_width, tip, truncate_middle};
+use fumi_ui::fonts::family_font;
+use crate::controls::{Probes, chevron_down, disclosure, hairline, mix, tabular_digits, text_width, tip, truncate_middle};
 use crate::font_picker::FontPicker;
 use crate::mac;
 use crate::scroller::{ScrollTarget, Scroller};
@@ -20,7 +21,7 @@ use fumi_workspace::Workspace;
 use gpui::prelude::*;
 use gpui::*;
 use objc::{class, msg_send, sel, sel_impl};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -67,7 +68,7 @@ pub const WECHAT_THEMES: [(&str, &str); 4] = [
     ("Songti", "songti-supplement"),
     ("Motion", "motion-journal"),
 ];
-pub const XHS_TEMPLATES: [(&str, &str); 4] = [("Memo", "memo"), ("Grid", "grid"), ("Post", "post"), ("Post Dark", "post-dark")];
+pub const XHS_TEMPLATES: [(&str, &str); 4] = [("Memo", "memo"), ("Grid", "grid"), ("Post", "post"), ("Post Dark", "postDark")];
 pub const XHS_RATIOS: [&str; 2] = ["3:4", "1:1"];
 pub const SIZE_RANGE: (f64, f64) = (12., 24.);
 
@@ -293,6 +294,8 @@ fn swatch(theme_: AppTheme, dark: bool) -> (id, Option<Arc<RenderImage>>) {
 pub struct SettingsSheet {
     workspace: Entity<Workspace>,
     on_change: OnChange,
+    /// The sheet's content as last laid out, for its appearing.
+    sheet_height: Rc<Cell<f32>>,
     focus: FocusHandle,
     prev_focus: Option<FocusHandle>,
     shown: Transition,
@@ -362,6 +365,7 @@ impl SettingsSheet {
         SettingsSheet {
             workspace,
             on_change,
+            sheet_height: Rc::new(Cell::new(0.)),
             focus: cx.focus_handle(),
             prev_focus: None,
             shown: Transition::new(false, FADE_SECS),
@@ -1217,7 +1221,13 @@ impl Render for SettingsSheet {
         // There's no blur to set the text on in Glass, so the page stays nearly solid.
         let (surface, edge) = if c.glass {
             let page = c.page.opacity(if dark { 0.88 } else { 0.92 });
-            (page, hsla(0., 0., 1., if dark { 0.12 } else { 0.75 }))
+            let edge = match (fumi_ui::native::has_liquid_glass(), dark) {
+                (true, true) => 0.12,
+                (true, false) => 0.75,
+                (false, true) => 0.14,
+                (false, false) => 0.9,
+            };
+            (page, hsla(0., 0., 1., edge))
         } else {
             (c.page, if dark { hsla(0., 0., 1., 0.07) } else { hsla(0., 0., 0., 0.05) })
         };
@@ -1269,6 +1279,7 @@ impl Render for SettingsSheet {
             })
             .children(thumb);
         let inner = div()
+            .relative()
             .w(px(SHEET_WIDTH))
             .flex_none()
             .flex()
@@ -1287,13 +1298,21 @@ impl Render for SettingsSheet {
                     .child("Settings"),
             )
             .child(body);
-        // The box grows from 97% around content that stays still.
+        // The box grows from 97% around content that stays still. Its height is
+        // the content's, known once it's been laid out.
+        let scale = APPEAR_SCALE + (1. - APPEAR_SCALE) * p;
+        let inner_height = self.sheet_height.clone();
+        let inner = inner.child(
+            canvas(move |bounds, _, _| inner_height.set(f32::from(bounds.size.height)), |_, _, _, _| {}).absolute().size_full(),
+        );
         let sheet = div()
             .id("settings-sheet")
             .occlude()
-            .w(px(SHEET_WIDTH * (APPEAR_SCALE + (1. - APPEAR_SCALE) * p)))
+            .w(px(SHEET_WIDTH * scale))
+            .when(p < 1. && self.sheet_height.get() > 0., |d| d.h(px(self.sheet_height.get() * scale)))
             .flex()
             .justify_center()
+            .items_center()
             .overflow_hidden()
             .rounded(px(SHEET_RADIUS))
             .bg(surface)
@@ -1431,6 +1450,6 @@ mod tests {
     fn accent_and_option_values_match_swift() {
         assert_eq!(ACCENTS.map(|a| a.0), ["Blue", "Ink", "Green", "Purple", "Red"]);
         assert_eq!(WECHAT_THEMES[2].1, "songti-supplement");
-        assert_eq!(XHS_TEMPLATES[3].1, "post-dark");
+        assert_eq!(XHS_TEMPLATES[3].1, "postDark");
     }
 }
