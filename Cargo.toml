@@ -1,0 +1,33 @@
+[package]
+name = "fumi-gpui"
+version = "0.4.0"
+edition = "2024"
+license = "MIT"
+
+[workspace]
+members = ["crates/*"]
+
+[dependencies]
+fumi-core = { path = "crates/fumi-core" }
+fumi-ui = { path = "crates/fumi-ui" }
+fumi-editor = { path = "crates/fumi-editor" }
+fumi-workspace = { path = "crates/fumi-workspace" }
+fumi-sidebar = { path = "crates/fumi-sidebar" }
+fumi-toolbar = { path = "crates/fumi-toolbar" }
+fumi-settings = { path = "crates/fumi-settings" }
+fumi-memos = { path = "crates/fumi-memos" }
+fumi-publish = { path = "crates/fumi-publish" }
+gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", default-features = false, features = ["font-kit", "runtime_shaders"] }
+objc = "0.2"
+cocoa = "0.26"
+libc = "0.2"
+
+[profile.release]
+debug = false
+incremental = false
+
+# gpui-pre-macos 0.3.11 calls Option::map_or_default, unstable on Rust 1.95.
+# Three lines changed; drop this patch on Rust 1.99.
+[patch.crates-io]
+gpui-pre-macos = { path = "vendor/gpui-pre-macos" }

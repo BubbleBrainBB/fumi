@@ -1,0 +1,28 @@
+[package]
+name = "fumi-publish"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+fumi-core = { path = "../fumi-core" }
+fumi-ui = { path = "../fumi-ui" }
+fumi-workspace = { path = "../fumi-workspace" }
+fumi-editor = { path = "../fumi-editor" }
+fumi-toolbar = { path = "../fumi-toolbar" }
+gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false }
+ratex-gpui = { version = "0.4", default-features = false }
+smallvec = "1"
+objc = "0.2"
+cocoa = "0.26"
+libc = "0.2"
+raw-window-handle = "0.6"
+block = "0.1"
+futures = "0.3"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+unicode-segmentation = "1"
+
+[dev-dependencies]
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", default-features = false, features = ["font-kit", "runtime_shaders"] }
