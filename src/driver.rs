@@ -463,7 +463,14 @@ async fn run(scenario: &str, window: WindowHandle<Editor>, cx: &mut AsyncApp) {
                     let h0 = window.update(cx, |e, _, _| e.head).unwrap();
                     match step(cx, window, &key, move |e| e.head != h0).await {
                         Some(s) => samples.push(s),
-                        None => failed += 1,
+                        None => {
+                            failed += 1;
+                            let why = window.update(cx, |e, _, _| {
+                                let l = e.doc.line_of(e.head);
+                                format!("{name}: head {h0} -> {} line {l} kind {:?} text {:?} prev {:?}", e.head, e.lines[l].kind, e.doc.line_text(l), e.lines.get(l.wrapping_sub(1)).map(|i| i.kind))
+                            }).unwrap();
+                            println!("FAIL {why}");
+                        }
                     }
                 }
                 report(name, &samples, failed);
@@ -567,6 +574,26 @@ async fn run(scenario: &str, window: WindowHandle<Editor>, cx: &mut AsyncApp) {
             post_click(500., 400.);
             sleep(cx, 300).await;
             window.update(cx, |e, _, _| log(e, "after click")).unwrap();
+        }
+        // Edits with real keys, undoes them, and saves with Cmd-S. The script
+        // then compares the file on disk with the original.
+        "save" => {
+            let n = window.update(cx, |e, _, _| e.doc.line_count()).unwrap();
+            place(window, cx, move |e| e.doc.line_start(n / 2));
+            sleep(cx, 200).await;
+            for c in "abc".chars() {
+                let _ = step(cx, window, &char_key(c), |_| true).await;
+            }
+            let _ = step(cx, window, &k_enter(), |_| true).await;
+            let _ = step(cx, window, &k_backspace(), |_| true).await;
+            for _ in 0..6 {
+                post(&k_undo());
+                sleep(cx, 60).await;
+            }
+            let same = window.update(cx, |e, _, _| e.doc.to_bytes()).unwrap() == before;
+            println!("CHECK edits undone in memory: {same}");
+            post(&Key { chars: "s".into(), plain: "s".into(), code: 1, flags: FLAG_CMD });
+            sleep(cx, 300).await;
         }
         "ime" => ime(window, cx).await,
         "tour" => tour(window, cx).await,
