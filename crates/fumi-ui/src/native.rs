@@ -297,3 +297,95 @@ impl SymbolCache {
             .clone()
     }
 }
+
+// Windows ---------------------------------------------------------------------
+
+/// The `NSWindow` behind a GPUI window, by its raw handle.
+pub fn ns_window_of(window: &Window) -> id {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let Ok(handle) = HasWindowHandle::window_handle(window) else { return nil };
+    match handle.as_raw() {
+        RawWindowHandle::AppKit(h) => unsafe {
+            let view = h.ns_view.as_ptr() as id;
+            msg_send![view, window]
+        },
+        _ => nil,
+    }
+}
+
+const NS_WINDOW_BELOW: i64 = -1;
+const AUTORESIZE_FILL: u64 = 2 | 16;
+
+/// Puts real Liquid Glass under GPUI's view (macOS 26), or the sidebar's
+/// behind-window blur kept active on older systems. Returns the view, to take
+/// away with `remove_backdrop` when the theme changes.
+pub fn install_glass_backdrop(window: id) -> id {
+    unsafe {
+        let container: id = msg_send![window, contentView];
+        let bounds: NSRect = msg_send![container, bounds];
+        let backdrop: id = if let Some(class) = class_named("NSGlassEffectView") {
+            let view: id = msg_send![class, alloc];
+            let view: id = msg_send![view, initWithFrame: bounds];
+            let _: () = msg_send![view, setStyle: 0i64];
+            view
+        } else {
+            let view: id = msg_send![class!(NSVisualEffectView), alloc];
+            let view: id = msg_send![view, initWithFrame: bounds];
+            let _: () = msg_send![view, setMaterial: 7i64];
+            let _: () = msg_send![view, setBlendingMode: 0i64];
+            let _: () = msg_send![view, setState: 1i64];
+            view
+        };
+        let _: () = msg_send![backdrop, setAutoresizingMask: AUTORESIZE_FILL];
+        let _: () = msg_send![container, addSubview: backdrop positioned: NS_WINDOW_BELOW relativeTo: nil];
+        let _: () = msg_send![window, setOpaque: false];
+        let clear: id = msg_send![class!(NSColor), clearColor];
+        let _: () = msg_send![window, setBackgroundColor: clear];
+        backdrop
+    }
+}
+
+pub fn remove_backdrop(window: id, backdrop: id) {
+    unsafe {
+        let _: () = msg_send![backdrop, removeFromSuperview];
+        let _: () = msg_send![window, setOpaque: true];
+        let color: id = msg_send![class!(NSColor), windowBackgroundColor];
+        let _: () = msg_send![window, setBackgroundColor: color];
+    }
+}
+
+/// Sets the app's appearance: `Some(dark)` forces it, `None` follows the system.
+pub fn set_app_appearance(dark: Option<bool>) {
+    unsafe {
+        let app: id = msg_send![class!(NSApplication), sharedApplication];
+        let appearance: id = match dark {
+            Some(d) => {
+                let name = ns(if d { "NSAppearanceNameDarkAqua" } else { "NSAppearanceNameAqua" });
+                msg_send![class!(NSAppearance), appearanceNamed: name]
+            }
+            None => nil,
+        };
+        let _: () = msg_send![app, setAppearance: appearance];
+    }
+}
+
+/// Reveals `path` in the Finder.
+pub fn reveal_in_finder(path: &std::path::Path) {
+    unsafe {
+        let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+        let url: id = msg_send![class!(NSURL), fileURLWithPath: ns(&path.to_string_lossy())];
+        let urls: id = msg_send![class!(NSArray), arrayWithObject: url];
+        let _: () = msg_send![workspace, activateFileViewerSelectingURLs: urls];
+    }
+}
+
+/// Moves `path` to the Trash. The Swift app deletes the same way.
+pub fn trash(path: &std::path::Path) -> bool {
+    unsafe {
+        let manager: id = msg_send![class!(NSFileManager), defaultManager];
+        let url: id = msg_send![class!(NSURL), fileURLWithPath: ns(&path.to_string_lossy())];
+        let out: *mut id = std::ptr::null_mut();
+        let err: *mut id = std::ptr::null_mut();
+        msg_send![manager, trashItemAtURL: url resultingItemURL: out error: err]
+    }
+}

@@ -575,6 +575,20 @@ pub fn set_active(tokens: Tokens) {
     ACTIVE.with(|c| c.set(tokens));
 }
 
+/// Re-reads theme, mode and accent from Settings and makes them active.
+/// `system_dark` is the window's appearance, used in Auto mode.
+pub fn apply_from_settings(system_dark: bool) -> Tokens {
+    use crate::settings as s;
+    let dark = match s::appearance_mode() {
+        AppearanceMode::Light => false,
+        AppearanceMode::Dark => true,
+        AppearanceMode::Auto => system_dark,
+    };
+    let tokens = Tokens::resolve(s::color_theme(), dark, &s::accent_hex());
+    set_active(tokens);
+    tokens
+}
+
 /// How strongly the window is dimmed behind a floating card, as a multiplier
 /// for what must look dimmed but sits above the scrim.
 pub fn scrim_shade(strength: f32, dark: bool) -> f32 {

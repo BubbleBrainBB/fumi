@@ -227,3 +227,42 @@ pub fn note_recent_workspace(path: &str) {
     list.truncate(5);
     set_strings(keys::RECENT_WORKSPACES, &list);
 }
+
+/// Reads `dictionary[sub]` as data: how the Swift app keeps per-library values.
+pub fn get_dict_data(key: &str, sub: &str) -> Option<Vec<u8>> {
+    unsafe {
+        let dict = object(key);
+        if dict == nil {
+            return None;
+        }
+        let is_dict: bool = msg_send![dict, isKindOfClass: class!(NSDictionary)];
+        if !is_dict {
+            return None;
+        }
+        let data: id = msg_send![dict, objectForKey: ns(sub)];
+        if data == nil {
+            return None;
+        }
+        let is_data: bool = msg_send![data, isKindOfClass: class!(NSData)];
+        if !is_data {
+            return None;
+        }
+        let len: u64 = msg_send![data, length];
+        let bytes: *const u8 = msg_send![data, bytes];
+        Some(std::slice::from_raw_parts(bytes, len as usize).to_vec())
+    }
+}
+
+pub fn set_dict_data(key: &str, sub: &str, value: &[u8]) {
+    unsafe {
+        let old = object(key);
+        let dict: id = if old != nil {
+            msg_send![class!(NSMutableDictionary), dictionaryWithDictionary: old]
+        } else {
+            msg_send![class!(NSMutableDictionary), dictionary]
+        };
+        let data: id = msg_send![class!(NSData), dataWithBytes: value.as_ptr() length: value.len() as u64];
+        let _: () = msg_send![dict, setObject: data forKey: ns(sub)];
+        let _: () = msg_send![defaults(), setObject: dict forKey: ns(key)];
+    }
+}

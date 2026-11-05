@@ -20,6 +20,7 @@ pub mod title;
 pub mod wiki_link;
 
 // Group B: files, sync and libraries.
+pub mod app_model;
 pub mod attachment_import;
 pub mod external_sync;
 pub mod library_list;

@@ -714,6 +714,27 @@ impl Editor {
         cx.notify();
     }
 
+    /// After Settings changed fonts, sizes or the theme: drops what baked the old
+    /// look in and measures everything again.
+    pub fn settings_changed(&mut self, typo: Typography, cx: &mut Context<Self>) {
+        self.typo = typo;
+        self.column_setting = fumi_ui::settings::editor_width();
+        self.blocks.clear();
+        let top = self.list.logical_scroll_top();
+        self.list.reset_with_uniform_height(self.items.len(), px(ITEM_HINT));
+        self.list.scroll_to(top);
+        cx.notify();
+    }
+
+    /// The link index changed: shown link text may differ, and with it the
+    /// height of any line, so everything is measured again.
+    pub fn links_changed(&mut self, cx: &mut Context<Self>) {
+        let top = self.list.logical_scroll_top();
+        self.list.reset_with_uniform_height(self.items.len(), px(ITEM_HINT));
+        self.list.scroll_to(top);
+        cx.notify();
+    }
+
     pub fn view_state(&self) -> ViewState {
         let top = self.list.logical_scroll_top();
         ViewState {

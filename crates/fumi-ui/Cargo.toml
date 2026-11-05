@@ -11,3 +11,4 @@ cocoa = "0.26"
 libc = "0.2"
 image = { version = "0.25", default-features = false }
 smallvec = "1"
+raw-window-handle = "0.6"

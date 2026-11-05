@@ -6,4 +6,6 @@ pub mod native;
 #[allow(deprecated)]
 pub mod settings;
 pub mod theme;
+pub mod fsevents;
+pub mod icons;
 
