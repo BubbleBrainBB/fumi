@@ -32,6 +32,7 @@ pub mod tabs;
 // Group C: memos, search and decks.
 pub mod fuzzy_search;
 pub mod memo_format;
+pub mod memo_inline;
 pub mod memo_markdown;
 pub mod sidebar_width;
 pub mod slash_command;
