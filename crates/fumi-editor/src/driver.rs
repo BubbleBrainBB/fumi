@@ -6,7 +6,7 @@
 //! numbers.
 
 use crate::editor::{Editor, ItemKind};
-use crate::markdown::Kind;
+use fumi_core::markdown::Kind;
 use crate::metrics;
 use cocoa::base::{id, nil};
 use cocoa::foundation::{NSPoint, NSString, NSUInteger};
@@ -644,7 +644,7 @@ async fn clickall(window: WindowHandle<Editor>, cx: &mut AsyncApp) {
                     // The first row of text: showing syntax can rewrap later
                     // rows, which moves characters without moving the caret
                     // off the one that was clicked.
-                    let row_y = item.text.as_ref().map(|(d, _)| item.bounds.top() + d.top + d.line_height / 2.);
+                    let row_y = item.text.as_ref().map(|(d, s)| item.bounds.top() + d.top + s.laid.rows[0].height / 2.);
                     let (x, is_text, hgt) = match &item.text {
                         Some((d, s)) => {
                             let empty = d.text.is_empty();
@@ -706,8 +706,8 @@ async fn clickall(window: WindowHandle<Editor>, cx: &mut AsyncApp) {
                     let p = e.painted.borrow();
                     let i = p.iter().find(|i| i.first_line == first)?;
                     let (d, s) = i.text.as_ref()?;
-                    (d.hang > 0 && s.rows.len() > 1).then(|| {
-                        let y = i.bounds.top() + d.top + d.line_height * (s.rows.len() as f32 - 0.5);
+                    (d.hang > 0 && s.row_count() > 1).then(|| {
+                        let y = i.bounds.top() + d.top + s.laid.height - s.laid.rows[s.row_count() - 1].height / 2.;
                         (y, i.bounds.left() + d.margin + d.indent + px(9.))
                     })
                     // Below the window edge there's nothing to click.
@@ -725,7 +725,7 @@ async fn clickall(window: WindowHandle<Editor>, cx: &mut AsyncApp) {
                         let (d, s) = i.text.as_ref()?;
                         let disp = d.src_to_disp(e.head - e.doc.line_start(line));
                         let row = s.row_of(disp);
-                        Some((line, row + 1 == s.rows.len(), f32::from(i.bounds.left() + d.margin + d.indent + s.x_of(disp, row))))
+                        Some((line, row + 1 == s.row_count(), f32::from(i.bounds.left() + d.margin + d.indent + s.x_of(disp, row))))
                     })
                     .unwrap();
                 let good = caret.is_some_and(|(l, last, cx_)| l == first && last && (cx_ - f32::from(x0)).abs() <= 22.);

@@ -1,0 +1,13 @@
+[package]
+name = "fumi-ui"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false }
+objc = "0.2"
+cocoa = "0.26"
+libc = "0.2"
+image = { version = "0.25", default-features = false }
+smallvec = "1"

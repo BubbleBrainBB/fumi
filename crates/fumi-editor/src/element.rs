@@ -1,0 +1,664 @@
+//! The element for one source line: measures it, draws the block decoration
+//! behind it, then selection, glyphs and what stands in for hidden syntax.
+
+use crate::display::*;
+use crate::textlayout::*;
+use fumi_ui::native::{self, SymbolCache};
+use fumi_ui::theme::t;
+use gpui::*;
+use std::cell::RefCell;
+use std::ops::Range;
+use std::rc::Rc;
+
+/// Shaped text with the line's vertical metrics.
+pub struct Shaped {
+    pub laid: Laid,
+    pub ascent: Pixels,
+    pub descent: Pixels,
+    pub natural: bool,
+}
+
+impl Shaped {
+    /// From the row's top down to its baseline. With a fixed line height the
+    /// extra room goes above the text, as TextKit puts it.
+    pub fn baseline(&self, row: usize) -> Pixels {
+        if self.natural {
+            self.ascent
+        } else {
+            self.laid.rows[row].height - self.descent
+        }
+    }
+
+    pub fn row_of(&self, disp: usize) -> usize {
+        self.laid.row_of(disp)
+    }
+
+    /// Distance from the text column; negative inside hung syntax.
+    pub fn x_of(&self, disp: usize, row: usize) -> Pixels {
+        self.laid.x_in_row(disp, row)
+    }
+
+    pub fn index_at(&self, row: usize, x: Pixels) -> usize {
+        self.laid.index_at(row, x)
+    }
+
+    pub fn row_count(&self) -> usize {
+        self.laid.rows.len()
+    }
+
+    pub fn height(&self, d: &DisplayLine) -> Pixels {
+        d.top + self.laid.height + d.bottom
+    }
+
+    /// The row at `y`, measured from the line's text top.
+    pub fn row_at(&self, y: Pixels) -> usize {
+        let rows = &self.laid.rows;
+        rows.iter().rposition(|r| r.y <= y).unwrap_or(0)
+    }
+}
+
+pub fn shape(d: &DisplayLine, width: Pixels, window: &Window) -> Rc<Shaped> {
+    let ts = window.text_system();
+    let font_id = ts.resolve_font(&d.base_font);
+    let ascent = ts.ascent(font_id, d.font_size);
+    let descent = ts.descent(font_id, d.font_size).abs();
+    let text = d.text.as_ref();
+    let runs: Vec<RunInput> = d
+        .spans
+        .iter()
+        .map(|s| RunInput {
+            text: &text[s.range.clone()],
+            font: &s.font,
+            size: s.size,
+            color: s.color,
+            kern_after: s.kern_after,
+            box_size: s.math.as_ref().map(|m| match &m.rendered {
+                Some(r) => size(px(r.width), px(r.height)),
+                None => size(px(8.), px(8.)),
+            }),
+        })
+        .collect();
+    let wrap_width = (width - d.margin * 2. - d.indent - d.tail).max(px(40.));
+    let hang = d.hang;
+    let (natural, fixed, spacing) = match d.metric {
+        LineMetric::Fixed(h) => (false, px(h), px(0.)),
+        LineMetric::Natural { spacing } => (true, ascent + descent + px(spacing), px(spacing)),
+    };
+    let _ = spacing;
+    let laid = Laid::shape(
+        text,
+        &runs,
+        |run_x| if hang > 0 { hang_x(d, run_x) } else { px(0.) },
+        wrap_width,
+        d.wrap,
+        |_, tallest| fixed.max(tallest),
+        window,
+    );
+    Rc::new(Shaped { laid, ascent, descent, natural })
+}
+
+/// Where the text starts after hung syntax.
+fn hang_x(d: &DisplayLine, run_x: &[Pixels]) -> Pixels {
+    d.spans
+        .iter()
+        .position(|s| s.range.start >= d.hang)
+        .and_then(|i| run_x.get(i).copied())
+        .unwrap_or_else(|| run_x.last().copied().unwrap_or_default())
+}
+
+pub struct Painted {
+    pub first_line: usize,
+    pub n_lines: usize,
+    pub bounds: Bounds<Pixels>,
+    pub text: Option<(Rc<DisplayLine>, Rc<Shaped>)>,
+}
+
+pub struct LineEl {
+    pub line: usize,
+    pub display: Rc<DisplayLine>,
+    pub caret: Option<usize>,
+    /// Where the caret is on this line, drawn or not (it blinks).
+    pub caret_head: Option<usize>,
+    pub autoscroll: bool,
+    /// Visible bytes selected, and whether the selection runs on past the line.
+    pub selection: Option<(Range<usize>, bool)>,
+    pub hovered: Option<Range<usize>>,
+    pub painted: Rc<RefCell<Vec<Painted>>>,
+    pub shaped: Rc<RefCell<Option<(Pixels, Rc<Shaped>)>>>,
+    pub symbols: Rc<RefCell<SymbolCache>>,
+}
+
+impl IntoElement for LineEl {
+    type Element = Self;
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+fn rounded(
+    bounds: Bounds<Pixels>,
+    color: Hsla,
+    radius: f32,
+    top: bool,
+    bottom: bool,
+    window: &mut Window,
+) {
+    let r = px(radius);
+    window.paint_quad(PaintQuad {
+        bounds,
+        corner_radii: Corners {
+            top_left: if top { r } else { px(0.) },
+            top_right: if top { r } else { px(0.) },
+            bottom_left: if bottom { r } else { px(0.) },
+            bottom_right: if bottom { r } else { px(0.) },
+        },
+        background: color.into(),
+        border_widths: Edges::default(),
+        border_color: transparent_black(),
+        border_style: BorderStyle::default(),
+    });
+}
+
+/// Callout type → symbol, as `CalloutKind.symbolName`.
+pub fn callout_symbol(raw: &str) -> &'static str {
+    use fumi_ui::theme::CalloutKind as K;
+    match raw.to_lowercase().as_str() {
+        "success" | "check" | "done" => "checkmark.circle",
+        "question" | "help" | "faq" => "questionmark.circle",
+        "todo" => "checklist",
+        "bug" => "ladybug",
+        _ => match K::of(raw) {
+            K::Note => "info.circle",
+            K::Tip => "lightbulb",
+            K::Important => "exclamationmark.bubble",
+            K::Warning => "exclamationmark.triangle",
+            K::Danger => "xmark.octagon",
+            K::Plain => "quote.opening",
+        },
+    }
+}
+
+impl Element for LineEl {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        _: &mut App,
+    ) -> (LayoutId, ()) {
+        let mut style = Style::default();
+        style.size.width = relative(1.).into();
+        let display = self.display.clone();
+        let slot = self.shaped.clone();
+        let id = window.request_measured_layout(style, move |known, avail, window, _| {
+            let width = known.width.unwrap_or(match avail.width {
+                AvailableSpace::Definite(w) => w,
+                _ => px(720.),
+            });
+            let shaped = shape(&display, width, window);
+            let h = shaped.height(&display);
+            *slot.borrow_mut() = Some((width, shaped));
+            size(width, h)
+        });
+        (id, ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        _: &mut App,
+    ) {
+        if !self.autoscroll {
+            return;
+        }
+        let d = &self.display;
+        let cached = self.shaped.borrow().clone();
+        let shaped = match cached {
+            Some((w, s)) if w == bounds.size.width => s,
+            _ => shape(d, bounds.size.width, window),
+        };
+        let row = shaped.row_of(self.caret_head.unwrap_or(0));
+        let top = bounds.top() + d.top + shaped.laid.rows[row].y;
+        let height = shaped.laid.rows[row].height;
+        window.request_autoscroll(Bounds::new(point(bounds.left(), top), size(px(1.), height)));
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let d = self.display.clone();
+        let c = t();
+        let cached = self.shaped.borrow().clone();
+        let shaped = match cached {
+            Some((w, s)) if w == bounds.size.width => s,
+            _ => shape(&d, bounds.size.width, window),
+        };
+        let laid = &shaped.laid;
+        let column_x = bounds.left() + d.margin;
+        let column_w = bounds.size.width - d.margin * 2.;
+        let text_x = column_x + d.indent;
+        let top_y = bounds.top() + d.top;
+        let origin = point(text_x, top_y);
+        let ts = window.text_system().clone();
+
+        // Block boxes reach into the spacing around their text.
+        if let Some(b) = d.boxed {
+            let pad = px(BLOCK_PADDING);
+            let y0 = if b.first { top_y - pad } else { bounds.top() };
+            let y1 = if b.last { top_y + laid.height + pad } else { bounds.bottom() };
+            rounded(
+                Bounds::from_corners(point(column_x, y0), point(column_x + column_w, y1)),
+                b.fill,
+                BLOCK_RADIUS,
+                b.first,
+                b.last,
+                window,
+            );
+        }
+
+        // A link under the pointer.
+        if let Some(range) = &self.hovered {
+            for (i, row) in laid.rows.iter().enumerate() {
+                let (a, e) = (range.start.max(row.start), range.end.min(row.end));
+                if a >= e {
+                    continue;
+                }
+                let base = top_y + row.y + shaped.baseline(i);
+                let x0 = laid.x_for_index(a) - row.x0;
+                let x1 = laid.x_for_index(e) - row.x0;
+                rounded(
+                    Bounds::from_corners(
+                        point(text_x + x0 - px(3.), base - shaped.ascent - px(2.)),
+                        point(text_x + x1 + px(3.), base + shaped.descent + px(2.)),
+                    ),
+                    c.text.opacity(0.07),
+                    4.,
+                    true,
+                    true,
+                    window,
+                );
+            }
+        }
+
+        // Pills and highlights.
+        for (r, span) in d.spans.iter().enumerate() {
+            let Some(fill) = span.fill else { continue };
+            let font_id = ts.resolve_font(&span.font);
+            let asc = ts.ascent(font_id, span.size);
+            let desc = ts.descent(font_id, span.size).abs();
+            for (i, row) in laid.rows.iter().enumerate() {
+                let (a, e) = (span.range.start.max(row.start), span.range.end.min(row.end));
+                if a >= e {
+                    continue;
+                }
+                // The trailing kerning is the pill's own padding.
+                let end_x = if e == span.range.end { laid.run_x[r + 1] } else { laid.x_for_index(e) };
+                let x0 = laid.x_for_index(a) - row.x0 - px(fill.pad);
+                let x1 = end_x - row.x0 - if fill.pad > 0. { px(0.) } else { span.kern_after };
+                let base = top_y + row.y + shaped.baseline(i);
+                rounded(
+                    Bounds::from_corners(
+                        point(text_x + x0, base - asc - px(fill.inset)),
+                        point(text_x + x1, base + desc + px(fill.inset)),
+                    ),
+                    fill.color,
+                    fill.radius,
+                    true,
+                    true,
+                    window,
+                );
+            }
+        }
+
+        // Selection, over the boxes and under the text.
+        if let Some((range, past_end)) = &self.selection {
+            let right = column_x + column_w - d.tail;
+            let last_row = laid.rows.len() - 1;
+            for (i, row) in laid.rows.iter().enumerate() {
+                let row_end = row.end.max(row.start);
+                if range.end < row.start || range.start > row_end {
+                    continue;
+                }
+                if range.start == range.end && !*past_end {
+                    continue;
+                }
+                let (a, e) = (range.start.max(row.start), range.end.min(row_end));
+                let x0 = text_x + laid.x_for_index(a) - row.x0;
+                // Selection that continues on reaches the column's edge, as NSTextView draws it.
+                let continues = (i < last_row && range.end > row_end) || (i == last_row && *past_end);
+                let x1 = if continues { right } else { text_x + laid.x_for_index(e) - row.x0 };
+                if x1 > x0 {
+                    window.paint_quad(fill(
+                        Bounds::from_corners(
+                            point(x0, top_y + row.y),
+                            point(x1, top_y + row.y + row.height),
+                        ),
+                        c.selection,
+                    ));
+                }
+            }
+        }
+
+        // Math boxes.
+        for (r, span) in d.spans.iter().enumerate() {
+            let Some(rendered) = span.math.as_ref().and_then(|m| m.rendered.clone()) else { continue };
+            let row_ix = laid.row_of(span.range.start);
+            let row = laid.rows[row_ix];
+            let base = top_y + row.y + shaped.baseline(row_ix);
+            let x = text_x + laid.run_x[r] - row.x0;
+            let h = px(rendered.height);
+            // Centered on the text's middle.
+            let y = (base - d.font_size * 0.33 - h / 2.).max(top_y + row.y);
+            let b = Bounds::new(point(x, y), size(px(rendered.width), h));
+            let _ = window.paint_image(
+                b,
+                b,
+                Corners::default(),
+                rendered.image.clone(),
+                0,
+                false,
+            );
+        }
+
+        // Text.
+        let shaped_ref = shaped.clone();
+        laid.paint_glyphs(origin, move |row| shaped_ref.baseline(row), window);
+
+        // Underlines and strikes.
+        for (r, span) in d.spans.iter().enumerate() {
+            if span.underline.is_none() && span.strike.is_none() {
+                continue;
+            }
+            let font_id = ts.resolve_font(&span.font);
+            let x_height = ts.x_height(font_id, span.size);
+            for (i, row) in laid.rows.iter().enumerate() {
+                let (a, e) = (span.range.start.max(row.start), span.range.end.min(row.end));
+                if a >= e {
+                    continue;
+                }
+                let end_x = if e == span.range.end { laid.run_x[r + 1] - span.kern_after } else { laid.x_for_index(e) };
+                let x0 = text_x + laid.x_for_index(a) - row.x0;
+                let x1 = text_x + end_x - row.x0;
+                let base = top_y + row.y + shaped.baseline(i);
+                if let Some(u) = span.underline {
+                    let y = (base + px(2.)).round();
+                    if u.dashed {
+                        let mut x = x0;
+                        while x < x1 {
+                            let w = px(3.).min(x1 - x);
+                            window.paint_quad(fill(Bounds::new(point(x, y), size(w, px(1.))), u.color));
+                            x += px(5.);
+                        }
+                    } else {
+                        window.paint_quad(fill(Bounds::new(point(x0, y), size(x1 - x0, px(1.))), u.color));
+                    }
+                }
+                if let Some(color) = span.strike {
+                    let y = (base - x_height / 2.).round();
+                    window.paint_quad(fill(Bounds::new(point(x0, y), size(x1 - x0, px(1.))), color));
+                }
+            }
+        }
+
+        // Quote bars, one per level.
+        if d.quote_depth > 0 {
+            for level in 0..d.quote_depth {
+                let x = column_x + px(level as f32 * QUOTE_INDENT);
+                let color = if level == 0 { c.text } else { c.nested_quote_bar };
+                window.paint_quad(fill(
+                    Bounds::from_corners(
+                        point(x, top_y + px(2.)),
+                        point(x + px(3.), top_y + laid.height),
+                    ),
+                    color,
+                ));
+            }
+        }
+
+        // What stands in for a list item's syntax.
+        if let Some(glyph) = &d.list {
+            let base = top_y + shaped.baseline(0);
+            let font_id = ts.resolve_font(&d.base_font);
+            let cap = ts.cap_height(font_id, d.font_size);
+            let center_y = base - cap / 2.;
+            let slot = text_x - px(LIST_SLOT);
+            let body = f32::from(d.font_size);
+            match glyph {
+                ListGlyph::Bullet(shape) => {
+                    let cx_ = slot + px(7.);
+                    let at = |w: f32| Bounds::new(point(cx_ - px(w / 2.), center_y - px(w / 2.)), size(px(w), px(w)));
+                    match shape {
+                        BulletShape::Disc => {
+                            let w = 5f32.max((body * 0.33).round());
+                            rounded(at(w), c.text, w / 2., true, true, window);
+                        }
+                        BulletShape::Ring => {
+                            let w = 5f32.max((body * 0.33).round());
+                            window.paint_quad(PaintQuad {
+                                bounds: at(w),
+                                corner_radii: Corners::all(px(w / 2.)),
+                                background: transparent_black().into(),
+                                border_widths: Edges::all(px(1.2)),
+                                border_color: c.text,
+                                border_style: BorderStyle::default(),
+                            });
+                        }
+                        BulletShape::Square => {
+                            let w = 4f32.max((body * 0.28).round());
+                            window.paint_quad(fill(at(w), c.text));
+                        }
+                    }
+                }
+                ListGlyph::Ordered(label) => {
+                    let mut f = ui_font();
+                    f.features = font_features_tnum();
+                    let run = TextRun {
+                        len: label.len(),
+                        font: f,
+                        color: c.text,
+                        background_color: None,
+                        underline: None,
+                        strikethrough: None,
+                    };
+                    let line = window.text_system().shape_line(label.clone(), d.font_size, &[run], None);
+                    let x = text_x - px(6.) - line.width;
+                    let row_h = laid.rows[0].height;
+                    let y = base - (row_h - line.ascent - line.descent) / 2. - line.ascent;
+                    let _ = line.paint(point(x, y), row_h, TextAlign::Left, None, window, cx);
+                }
+                ListGlyph::Task { checked } => {
+                    let box_ = Bounds::new(point(slot + px(1.), center_y - px(8.)), size(px(16.), px(16.)));
+                    if *checked {
+                        rounded(box_, c.accent, 4., true, true, window);
+                        paint_check(box_, window);
+                    } else {
+                        window.paint_quad(PaintQuad {
+                            bounds: box_,
+                            corner_radii: Corners::all(px(4.)),
+                            background: transparent_black().into(),
+                            border_widths: Edges::all(px(1.5)),
+                            border_color: c.checkbox_border,
+                            border_style: BorderStyle::default(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // A horizontal rule across the column.
+        if d.rule {
+            let y = (top_y + laid.height / 2.).round();
+            window.paint_quad(fill(Bounds::new(point(column_x, y), size(column_w, px(1.))), c.rule));
+        }
+
+        // Callout icon.
+        if let Some((raw, color)) = &d.callout_icon {
+            let scale = window.scale_factor();
+            let image = self.symbols.borrow_mut().get(callout_symbol(raw), 13., native::weight::SEMIBOLD, *color, scale);
+            if let Some((image, (w, h))) = image {
+                let base = top_y + shaped.baseline(0);
+                let font_id = ts.resolve_font(&d.base_font);
+                let cy = base - ts.cap_height(font_id, d.font_size) / 2.;
+                let x = column_x + px(14. + (16. - w) / 2.);
+                let b = Bounds::new(point(x, cy - px(h / 2.)), size(px(w), px(h)));
+                let _ = window.paint_image(
+                    b,
+                    b,
+                    Corners::default(),
+                    image,
+                    0,
+                    false,
+                );
+            }
+        }
+
+        // The code block's language, top right.
+        if let Some(language) = &d.code_language {
+            let run = TextRun {
+                len: language.len(),
+                font: ui_font(),
+                color: c.text3,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            let line = window.text_system().shape_line(language.clone(), px(12.), &[run], None);
+            let box_top = top_y - px(BLOCK_PADDING);
+            let x = column_x + column_w - px(12.) - line.width;
+            let _ = line.paint(point(x, box_top + px(7.)), px(15.), TextAlign::Left, None, window, cx);
+        }
+
+        if let Some(caret) = self.caret {
+            let row = shaped.row_of(caret);
+            let x = shaped.x_of(caret, row);
+            let base = top_y + laid.rows[row].y + shaped.baseline(row);
+            let (asc, desc) = (shaped.ascent, shaped.descent);
+            window.paint_quad(fill(
+                Bounds::new(point(text_x + x - px(0.5), base - asc), size(px(1.5), asc + desc)),
+                c.accent,
+            ));
+        }
+
+        self.painted.borrow_mut().push(Painted {
+            first_line: self.line,
+            n_lines: 1,
+            bounds,
+            text: Some((self.display.clone(), shaped)),
+        });
+    }
+}
+
+fn font_features_tnum() -> FontFeatures {
+    FontFeatures(std::sync::Arc::new(vec![("tnum".to_string(), 1)]))
+}
+
+/// The white tick in a checked box.
+fn paint_check(b: Bounds<Pixels>, window: &mut Window) {
+    let (l, r) = (b.left(), b.right());
+    let (t_, bt) = (b.top(), b.bottom());
+    let mid = (t_ + bt) / 2.;
+    let mut path = PathBuilder::stroke(px(2.));
+    path.move_to(point(l + px(4.), mid - px(0.5)));
+    path.line_to(point(l + px(7.), mid + px(2.5)));
+    path.line_to(point(r - px(3.5), t_ + px(5.)));
+    if let Ok(path) = path.build() {
+        window.paint_path(path, white());
+    }
+}
+
+/// A folded block. It records the bounds it really got, at paint time, so clicks
+/// can find it. A child overlay asked to fill the block came back several times
+/// too tall, and a list may prepaint an item more than once in a frame.
+pub struct BlockEl {
+    pub child: AnyElement,
+    pub first_line: usize,
+    pub n_lines: usize,
+    pub selected: bool,
+    pub painted: Rc<RefCell<Vec<Painted>>>,
+}
+
+impl IntoElement for BlockEl {
+    type Element = Self;
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl Element for BlockEl {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        (self.child.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.child.prepaint(window, cx);
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.child.paint(window, cx);
+        if self.selected {
+            window.paint_quad(fill(bounds, t().selection));
+        }
+        self.painted.borrow_mut().push(Painted {
+            first_line: self.first_line,
+            n_lines: self.n_lines,
+            bounds,
+            text: None,
+        });
+    }
+}

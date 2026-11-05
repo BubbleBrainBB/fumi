@@ -1,14 +1,5 @@
-use fumi_core::{doc, markdown};
-
-mod blocks;
-mod display;
-#[allow(deprecated, unexpected_cfgs)]
-mod driver;
-mod editor;
-mod element;
-mod metrics;
-
-use editor::{Editor, Quit};
+use fumi_editor::editor::{self, Editor, Quit};
+use fumi_editor::{driver, metrics};
 use gpui::*;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -21,6 +12,12 @@ fn main() {
     let blur = std::env::var("FUMI_BLUR").is_ok();
 
     gpui_platform::application().run(move |cx: &mut App| {
+        let dark = matches!(fumi_ui::settings::appearance_mode(), fumi_ui::theme::AppearanceMode::Dark);
+        fumi_ui::theme::set_active(fumi_ui::theme::Tokens::resolve(
+            fumi_ui::settings::color_theme(),
+            dark,
+            &fumi_ui::settings::accent_hex(),
+        ));
         metrics::install_runloop_observer();
         editor::bind_keys(cx);
         cx.on_action(|_: &Quit, cx| cx.quit());

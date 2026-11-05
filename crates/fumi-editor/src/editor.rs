@@ -2,10 +2,13 @@
 //! virtualized list of items that GPUI's `list` lays out on demand.
 
 use crate::blocks::{self, BlockCache};
+use fumi_core::markdown::{find_title, scan_all};
+use fumi_ui::native::SymbolCache;
+use fumi_ui::theme::t;
 use crate::display::*;
-use crate::doc::Doc;
+use fumi_core::doc::Doc;
 use crate::element::*;
-use crate::markdown::*;
+use fumi_core::markdown::*;
 use crate::metrics;
 use gpui::prelude::*;
 use gpui::*;
@@ -70,8 +73,9 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
-const TOP_PAD: f32 = 52.;
-const BOTTOM_PAD: f32 = 120.;
+const TOP_PAD: f32 = 30.;
+const BOTTOM_PAD: f32 = 30.;
+const MIN_SIDE_INSET: f32 = 40.;
 /// What an item not yet laid out is assumed to measure.
 const ITEM_HINT: f32 = 48.;
 
@@ -81,6 +85,7 @@ pub enum ItemKind {
     Table,
     Math,
     Image,
+    Front,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -134,6 +139,12 @@ pub struct Editor {
     restore_hints: bool,
     pub show_status: bool,
     pub load_error: Option<String>,
+    pub typo: Typography,
+    pub links: Option<LinkContext>,
+    pub symbols: Rc<RefCell<SymbolCache>>,
+    hovered_link: Option<(usize, Range<usize>)>,
+    pub pane_width: Option<Pixels>,
+    pub column_setting: String,
 }
 
 impl Editor {
@@ -174,8 +185,14 @@ impl Editor {
             autoscroll_caret: false,
             last_shown: 0,
             restore_hints: false,
-            show_status: true,
+            show_status: false,
             load_error: None,
+            typo: Typography::from_settings(),
+            links: None,
+            symbols: Rc::new(RefCell::new(SymbolCache::default())),
+            hovered_link: None,
+            pane_width: None,
+            column_setting: fumi_ui::settings::editor_width(),
         };
         this.load_bytes(bytes);
         if blink {
@@ -250,6 +267,13 @@ impl Editor {
         let is_math = |k: Kind| matches!(k, Kind::MathOpen | Kind::MathBody | Kind::MathClose);
         match kind {
             Kind::Image | Kind::MathOne => Some(line..line + 1),
+            Kind::FrontOpen | Kind::FrontBody | Kind::FrontClose => {
+                let mut b = line;
+                while b < self.lines.len() && self.lines[b].kind != Kind::FrontClose {
+                    b += 1;
+                }
+                (b < self.lines.len()).then_some(0..b + 1)
+            }
             k if is_table(k) => {
                 let mut a = line;
                 while self.lines[a].kind != Kind::TableHead && a > 0 {
@@ -278,8 +302,16 @@ impl Editor {
 
     /// Re-reads the lines an edit touched, and past them until the scan state
     /// agrees with what it was. Returns whether any classification changed.
-    fn rescan(&mut self, first: usize, removed: usize, added: usize) -> bool {
-        let placeholder = LineInfo { kind: Kind::Para, after: Scan::Normal };
+    /// `sensitive` says the edit may have changed which fences and `$$` pair up,
+    /// which only a pass over the whole text can tell.
+    fn rescan(&mut self, first: usize, removed: usize, added: usize, sensitive: bool) -> bool {
+        if sensitive {
+            let new = scan_all(&self.doc.rope.to_string());
+            let changed = new != self.lines;
+            self.lines = new;
+            return changed;
+        }
+        let placeholder = LineInfo { kind: Kind::Para, after: Scan::Normal, real: false };
         let mut changed = removed != added;
         self.lines.splice(
             first..first + removed + 1,
@@ -294,9 +326,9 @@ impl Editor {
         let mut text = self.doc.line_text(i);
         while i < n {
             let next = (i + 1 < n).then(|| self.doc.line_text(i + 1));
-            let mut info = classify(&text, next.as_deref(), before, i);
-            info.kind = table_kind(&text, prev, info.kind);
             let old = self.lines[i];
+            let mut info = classify(&text, next.as_deref(), before, i, old.real);
+            info.kind = table_kind(&text, prev, info.kind);
             if i > dirty_end && old == info {
                 break;
             }
@@ -310,6 +342,29 @@ impl Editor {
             text = next.unwrap_or_default();
         }
         changed
+    }
+
+    /// Whether replacing `range` with `text` could change block pairing.
+    fn edit_is_sensitive(&self, range: &Range<usize>, text: &str) -> bool {
+        let first = self.doc.line_of(range.start);
+        let last = self.doc.line_of(range.end);
+        if first == 0 || self.lines.first().is_some_and(|l| l.kind == Kind::FrontOpen) && first < 200 {
+            return true;
+        }
+        (first..=last).any(|l| pairing_sensitive(&self.doc.line_text(l)))
+            || text.split('\n').any(pairing_sensitive)
+            || {
+                // The line as it will read once joined with what's around the edit.
+                let start = self.doc.line_start(first);
+                let end = self.doc.line_end(last);
+                let joined = format!(
+                    "{}{}{}",
+                    self.doc.slice(start..range.start),
+                    text,
+                    self.doc.slice(range.end..end)
+                );
+                joined.split('\n').any(pairing_sensitive)
+            }
     }
 
     /// Recomputes items and tells the list only what differs.
@@ -379,9 +434,11 @@ impl Editor {
         }
         if line != prev {
             self.remeasure_lines(prev..prev + 1);
-            self.remeasure_lines(line..line + 1);
             self.caret_line = line;
         }
+        // Inline syntax shows only on the span the caret touches, so even a
+        // move within the line can change its layout.
+        self.remeasure_lines(line..line + 1);
         self.caret_on = true;
         self.blink_epoch = 1;
     }
@@ -439,9 +496,10 @@ impl Editor {
         let first = self.doc.line_of(range.start);
         let removed = self.doc.line_of(range.end) - first;
         let old = self.doc.slice(range.clone());
+        let sensitive = self.edit_is_sensitive(&range, text);
         self.doc.replace(range.clone(), text);
         let added = text.bytes().filter(|b| *b == b'\n').count();
-        let changed = self.rescan(first, removed, added);
+        let changed = self.rescan(first, removed, added, sensitive);
 
         let caret = range.start + text.len();
         self.anchor = caret;
@@ -492,9 +550,10 @@ impl Editor {
     fn apply(&mut self, at: usize, old_len: usize, text: &str, sel: (usize, usize)) {
         let first = self.doc.line_of(at);
         let removed = self.doc.line_of(at + old_len) - first;
+        let sensitive = self.edit_is_sensitive(&(at..at + old_len), text);
         self.doc.replace(at..at + old_len, text);
         let added = text.bytes().filter(|b| *b == b'\n').count();
-        let changed = self.rescan(first, removed, added);
+        let changed = self.rescan(first, removed, added, sensitive);
         self.anchor = sel.0;
         self.head = sel.1;
         self.marked = None;
@@ -529,31 +588,8 @@ impl Editor {
         cx.notify();
     }
 
+    /// Plain, as NSTextView has it: no list or quote continuation.
     fn enter(&mut self, _: &Enter, _: &mut Window, cx: &mut Context<Self>) {
-        let line = self.doc.line_of(self.head);
-        let start = self.doc.line_start(line);
-        let text = self.doc.line_text(line);
-        if let Kind::List { indent, marker } = self.lines[line].kind
-            && self.selection_is_empty()
-        {
-            let (n, m) = (indent as usize, marker as usize);
-            if text.len() <= n + m {
-                // Enter on an empty item ends the list.
-                self.edit(start..start + text.len(), "", false, false);
-                cx.notify();
-                return;
-            }
-            let lead = &text[..n + m];
-            let next = if lead.as_bytes()[n].is_ascii_digit() {
-                let digits: String = lead[n..].chars().take_while(char::is_ascii_digit).collect();
-                let value: u64 = digits.parse().unwrap_or(0) + 1;
-                format!("{}{value}{}", &lead[..n], &lead[n + digits.len()..])
-            } else {
-                lead.to_string()
-            };
-            self.replace_selection(&format!("\n{next}"), false, cx);
-            return;
-        }
         self.replace_selection("\n", false, cx);
     }
 
@@ -675,8 +711,8 @@ impl Editor {
         self.caret_moved(true);
     }
 
-    fn shape_line(&self, line: usize, reveal: bool, window: &Window) -> (Rc<DisplayLine>, Rc<Shaped>) {
-        let d = Rc::new(self.display_of(line, reveal));
+    fn shape_line(&self, line: usize, caret: Option<usize>, window: &Window) -> (Rc<DisplayLine>, Rc<Shaped>) {
+        let d = Rc::new(self.display_of(line, caret));
         let s = shape(&d, self.list_width, window);
         (d, s)
     }
@@ -690,13 +726,13 @@ impl Editor {
         }
         let line = self.doc.line_of(self.head);
         let start = self.doc.line_start(line);
-        let (d, s) = self.shape_line(line, true, window);
+        let (d, s) = self.shape_line(line, Some(self.head - start), window);
         let disp = d.src_to_disp(self.head - start);
         let row = s.row_of(disp);
         let x = self.goal_x.unwrap_or(d.indent + s.x_of(disp, row));
         self.goal_x = Some(x);
 
-        let target = if down && row + 1 < s.rows.len() {
+        let target = if down && row + 1 < s.row_count() {
             start + d.disp_to_src(s.index_at(row + 1, x - d.indent))
         } else if !down && row > 0 {
             start + d.disp_to_src(s.index_at(row - 1, x - d.indent))
@@ -711,8 +747,8 @@ impl Editor {
                 // A folded block opens on the near line, source visible.
                 self.doc.line_start(next)
             } else {
-                let (nd, ns) = self.shape_line(next, false, window);
-                let r = if down { 0 } else { ns.rows.len() - 1 };
+                let (nd, ns) = self.shape_line(next, None, window);
+                let r = if down { 0 } else { ns.row_count() - 1 };
                 self.doc.line_start(next) + nd.disp_to_src(ns.index_at(r, x - nd.indent))
             }
         };
@@ -832,9 +868,7 @@ impl Editor {
         match &item.text {
             None => start,
             Some((d, s)) => {
-                let y = p.y - item.bounds.top() - d.top;
-                let row = ((f32::from(y) / f32::from(d.line_height)).floor().max(0.) as usize)
-                    .min(s.rows.len() - 1);
+                let row = s.row_at(p.y - item.bounds.top() - d.top);
                 let x = p.x - item.bounds.left() - d.margin - d.indent;
                 start + d.disp_to_src(s.index_at(row, x))
             }
@@ -847,15 +881,23 @@ impl Editor {
         let item = painted
             .iter()
             .find(|i| p.y >= i.bounds.top() && p.y < i.bounds.bottom())?;
-        let (d, _) = item.text.as_ref()?;
+        let (d, s) = item.text.as_ref()?;
+        if !matches!(d.list, Some(ListGlyph::Task { .. })) {
+            return None;
+        }
+        // The box's frame, a little forgiving, as the Swift hit test has it.
         let text_x = item.bounds.left() + d.margin + d.indent;
-        (d.task && p.x < text_x && p.x >= text_x - px(26.)).then_some(item.first_line)
+        let base = item.bounds.top() + d.top + s.baseline(0);
+        let center_y = base - d.font_size * 0.35;
+        let x0 = text_x - px(LIST_SLOT) + px(1.);
+        (p.x >= x0 - px(4.) && p.x <= x0 + px(20.) && (p.y - center_y).abs() <= px(12.)).then_some(item.first_line)
     }
 
     /// Flips `[ ]` and `[x]` without moving the caret, as Fumi does.
     fn toggle_task(&mut self, line: usize) {
         let Kind::List { indent, marker } = self.lines[line].kind else { return };
         let at = self.doc.line_start(line) + indent as usize + marker as usize + 1;
+        debug_assert!(at < self.doc.len());
         let flipped = if self.doc.slice(at..at + 1) == " " { "x" } else { " " };
         let sel = (self.anchor, self.head);
         self.edit(at..at + 1, flipped, false, false);
@@ -923,32 +965,90 @@ impl Editor {
 
     // Rendering ------------------------------------------------------------
 
-    pub fn display_of(&self, line: usize, reveal: bool) -> DisplayLine {
-        let text = self.doc.line_text(line);
+    /// The language of the code block holding `line`, or the callout type of
+    /// the `:::` or `> [!x]` block holding it.
+    fn block_type_of(&self, line: usize) -> String {
         let kind = self.lines[line].kind;
-        let is_code = |l: usize| {
-            self.lines.get(l).is_some_and(|i| {
-                matches!(i.kind, Kind::FenceOpen | Kind::FenceBody | Kind::FenceClose)
-            })
+        let open = match kind {
+            Kind::FenceOpen | Kind::FenceBody | Kind::FenceClose => Kind::FenceOpen,
+            Kind::CalloutOpen | Kind::CalloutBody | Kind::CalloutClose => Kind::CalloutOpen,
+            Kind::QuoteCalloutTitle | Kind::QuoteCalloutBody => Kind::QuoteCalloutTitle,
+            _ => return String::new(),
         };
+        let at = (0..=line).rev().find(|l| self.lines[*l].kind == open).unwrap_or(line);
+        let text = self.doc.line_text(at);
+        match open {
+            Kind::FenceOpen => text
+                .trim()
+                .trim_start_matches(['`', '~'])
+                .split(' ')
+                .next()
+                .unwrap_or("")
+                .to_string(),
+            Kind::CalloutOpen => text
+                .trim()
+                .trim_start_matches(':')
+                .trim()
+                .split(' ')
+                .next()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("note")
+                .to_string(),
+            _ => callout_type(quote_content(&text)).unwrap_or("note").to_string(),
+        }
+    }
+
+    /// Whether a `:::` body is inside a closed callout.
+    fn callout_closed(&self, line: usize) -> bool {
+        (0..=line)
+            .rev()
+            .find(|l| self.lines[*l].kind == Kind::CalloutOpen)
+            .is_some_and(|l| self.lines[l].real)
+    }
+
+    pub fn display_of(&self, line: usize, caret: Option<usize>) -> DisplayLine {
+        let text = self.doc.line_text(line);
+        let info = self.lines[line];
+        let kind = info.kind;
         let start = self.doc.line_start(line);
         let marked = self.marked.as_ref().and_then(|m| {
             let (a, b) = (m.start.max(start), m.end.min(start + text.len()));
             (a < b).then(|| a - start..b - start)
         });
+        let block_type = self.block_type_of(line);
+        let real = match kind {
+            Kind::CalloutBody | Kind::CalloutClose => self.callout_closed(line),
+            _ => info.real,
+        };
+        let kind_at = |l: Option<usize>| l.and_then(|l| self.lines.get(l)).map_or(Kind::Blank, |i| i.kind);
         let mut d = build_line(
             &text,
             &LineCtx {
                 kind,
-                reveal,
+                caret,
                 title: self.title_line == Some(line),
                 marked,
-                prev_is_code: line > 0 && is_code(line - 1),
-                next_is_code: is_code(line + 1),
+                prev: kind_at(line.checked_sub(1)),
+                next: kind_at(Some(line + 1)),
+                block_type: &block_type,
+                typo: &self.typo,
+                links: self.links.as_ref(),
+                real,
+                raw_block: false,
             },
         );
         d.margin = self.margin;
         d
+    }
+
+    /// Typesets the line's inline math and hands the result to its spans.
+    fn fill_math(&mut self, d: &mut DisplayLine, window: &Window) {
+        let size = f32::from(d.font_size);
+        for span in &mut d.spans {
+            if let Some(math) = &mut span.math {
+                math.rendered = blocks::inline_math(&math.latex, size, &mut self.blocks, window);
+            }
+        }
     }
 
     fn render_item(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -959,8 +1059,11 @@ impl Editor {
         if item.kind == ItemKind::Line {
             let reveal = line == self.caret_line;
             let autoscroll = reveal && std::mem::take(&mut self.autoscroll_caret);
-            let display = Rc::new(self.display_of(line, reveal));
             let start = self.doc.line_start(line);
+            let caret_at = reveal.then(|| self.head.saturating_sub(start));
+            let mut built = self.display_of(line, caret_at);
+            self.fill_math(&mut built, window);
+            let display = Rc::new(built);
             let src_len = display.src_len;
             let display_head = if reveal { display.src_to_disp(self.head - start) } else { 0 };
             let caret = (self.selection_is_empty() && self.caret_on && reveal).then_some(display_head);
@@ -973,6 +1076,11 @@ impl Editor {
                     let b = sel.end.min(start + src_len) - start;
                     (display.src_to_disp(a)..display.src_to_disp(b), sel.end > start + src_len)
                 });
+            let hovered = self
+                .hovered_link
+                .as_ref()
+                .filter(|(l, _)| *l == line)
+                .map(|(_, r)| r.clone());
             let image_below = (reveal && self.lines[line].kind == Kind::Image).then(|| {
                 let src = self.doc.line_text(line);
                 let img = blocks::image(&src, &self.dir, self.text_width, &mut self.blocks);
@@ -985,8 +1093,10 @@ impl Editor {
                 caret_head: if reveal { Some(display_head) } else { None },
                 autoscroll,
                 selection,
+                hovered,
                 painted: self.painted.clone(),
                 shaped: Rc::new(RefCell::new(None)),
+                symbols: self.symbols.clone(),
             };
             // An image stays on the page under its source, as in Fumi, so
             // clicking one doesn't pull everything below it upward.
@@ -999,8 +1109,9 @@ impl Editor {
         let range = line..line + item.len as usize;
         let src = self.doc.slice(self.doc.line_start(range.start)..self.doc.line_end(range.end - 1));
         let body: AnyElement = match item.kind {
-            ItemKind::Table => blocks::table(&src, self.text_width, &mut self.blocks, window, cx),
-            ItemKind::Math => blocks::math(&src, &mut self.blocks, window),
+            ItemKind::Table => blocks::table(&src, self.text_width, &self.typo, &mut self.blocks, window, cx),
+            ItemKind::Math => blocks::math(&src, self.text_width, &self.typo, &mut self.blocks, window),
+            ItemKind::Front => blocks::frontmatter(&src, self.text_width, &self.typo, window, cx),
             ItemKind::Image => blocks::image(&src, &self.dir, self.text_width, &mut self.blocks),
             ItemKind::Line => unreachable!(),
         };
@@ -1031,6 +1142,15 @@ impl Editor {
     }
 }
 
+/// The text column's cap for Settings › Writing › Width.
+pub fn column_cap(setting: &str) -> f32 {
+    match setting {
+        "narrow" => 600.,
+        "wide" => 860.,
+        _ => 680.,
+    }
+}
+
 impl Focusable for Editor {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
@@ -1042,9 +1162,10 @@ impl Render for Editor {
         metrics::frame_begin();
         self.last_shown = self.painted.borrow().len();
         self.painted.borrow_mut().clear();
-        let vw = window.viewport_size().width;
-        let column = px(720.).min(vw - px(96.));
-        let side = (vw - column) / 2.;
+        let vw = self.pane_width.unwrap_or(window.viewport_size().width);
+        let cap = px(column_cap(&self.column_setting));
+        let side = ((vw - cap) / 2.).max(px(MIN_SIDE_INSET));
+        let column = vw - side * 2.;
         if column != self.text_width || vw != self.list_width {
             self.text_width = column;
             self.list_width = vw;
@@ -1064,9 +1185,9 @@ impl Render for Editor {
             .track_focus(&self.focus)
             .size_full()
             .relative()
-            .bg(if self.see_through { hsla(0., 0., 1., 0.55) } else { hsla(0., 0., 1., 1.) })
-            .text_color(ink())
-            .font(body_font())
+            .bg(t().page_content)
+            .text_color(t().text)
+            .font(self.typo.body())
             .cursor(CursorStyle::IBeam);
         let root = self.register_actions(root, cx);
 
@@ -1091,7 +1212,7 @@ impl Render for Editor {
                     .w(px(5.))
                     .h(height)
                     .rounded(px(3.))
-                    .bg(rgb(0xDDDCD7))
+                    .bg(t().text.opacity(0.18))
             }))
             .children(status.map(|text| {
                 div()
@@ -1099,7 +1220,7 @@ impl Render for Editor {
                     .bottom(px(8.))
                     .right(px(14.))
                     .text_size(px(11.))
-                    .text_color(marker_gray())
+                    .text_color(t().marker)
                     .child(text)
             }))
             .child(
@@ -1243,8 +1364,9 @@ impl EntityInputHandler for Editor {
         let disp = d.src_to_disp(at - start);
         let row = s.row_of(disp);
         let x = s.x_of(disp, row);
-        let origin = item.bounds.origin + point(d.margin + d.indent + x, d.top + d.line_height * row as f32);
-        Some(Bounds::new(origin, size(px(1.), d.line_height)))
+        let r = s.laid.rows[row];
+        let origin = item.bounds.origin + point(d.margin + d.indent + x, d.top + r.y);
+        Some(Bounds::new(origin, size(px(1.), r.height)))
     }
 
     fn character_index_for_point(
@@ -1262,36 +1384,6 @@ impl EntityInputHandler for Editor {
 }
 
 // Whole-document passes -------------------------------------------------------
-
-pub fn scan_all(text: &str) -> Vec<LineInfo> {
-    let mut out = Vec::with_capacity(text.len() / 40 + 1);
-    let mut before = Scan::Normal;
-    let mut prev = Kind::Blank;
-    let mut rest = text.split('\n').peekable();
-    let mut i = 0;
-    while let Some(raw) = rest.next() {
-        let line = raw.strip_suffix('\r').unwrap_or(raw);
-        let next = rest.peek().map(|n| n.strip_suffix('\r').unwrap_or(n));
-        let mut info = classify(line, next, before, i);
-        info.kind = table_kind(line, prev, info.kind);
-        out.push(info);
-        before = info.after;
-        prev = info.kind;
-        i += 1;
-    }
-    out
-}
-
-pub fn find_title(lines: &[LineInfo]) -> Option<usize> {
-    for (i, l) in lines.iter().enumerate() {
-        match l.kind {
-            Kind::Blank | Kind::FrontOpen | Kind::FrontBody | Kind::FrontClose => continue,
-            Kind::Heading(1) => return Some(i),
-            _ => return None,
-        }
-    }
-    None
-}
 
 /// Where two item lists over the same lines differ: old index ranges and how
 /// many items replace each, in order.
@@ -1336,6 +1428,10 @@ pub fn build_items(lines: &[LineInfo], revealed: Option<&Range<usize>>) -> Vec<I
             continue;
         }
         let folded = match lines[i].kind {
+            Kind::FrontOpen => {
+                let close = lines[i..].iter().position(|l| l.kind == Kind::FrontClose);
+                close.map(|c| (c + 1, ItemKind::Front))
+            }
             Kind::Image => Some((1, ItemKind::Image)),
             Kind::MathOne => Some((1, ItemKind::Math)),
             Kind::TableHead => {
@@ -1379,7 +1475,7 @@ mod tests {
         assert_eq!(lines.len(), DOC.split('\n').count());
         let items = build_items(&lines, None);
         let kinds: Vec<ItemKind> = items.iter().map(|i| i.kind).filter(|k| *k != ItemKind::Line).collect();
-        assert_eq!(kinds, [ItemKind::Table, ItemKind::Math, ItemKind::Image]);
+        assert_eq!(kinds, [ItemKind::Front, ItemKind::Table, ItemKind::Math, ItemKind::Image]);
         let covered: u32 = items.iter().map(|i| i.len).sum();
         assert_eq!(covered as usize, lines.len());
     }
@@ -1421,11 +1517,4 @@ mod tests {
         assert!(build_items(&lines, None).iter().all(|i| i.kind == ItemKind::Line));
     }
 
-    #[core::prelude::v1::test]
-    fn crlf_tables_classify() {
-        let lines = scan_all("| a |\r\n| - |\r\n| 1 |\r\n");
-        assert_eq!(lines[0].kind, Kind::TableHead);
-        assert_eq!(lines[1].kind, Kind::TableDelim);
-        assert_eq!(lines[2].kind, Kind::TableRow);
-    }
 }
