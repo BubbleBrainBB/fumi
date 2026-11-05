@@ -238,12 +238,13 @@ async fn step(
     check: impl Fn(&Editor) -> bool,
 ) -> Option<Sample> {
     sleep(cx, 25).await;
-    let f0 = metrics::frames();
+    let seq0 = metrics::change_seq();
     let t0 = metrics::now();
     let b0 = metrics::busy_ns();
     post(key);
     let deadline = Instant::now() + Duration::from_secs(3);
-    while metrics::frames() == f0 {
+    // Done when a frame has painted the change this key made.
+    while metrics::painted_change() <= seq0 {
         if Instant::now() > deadline {
             return None;
         }
@@ -331,10 +332,13 @@ async fn run(scenario: &str, window: WindowHandle<Editor>, cx: &mut AsyncApp) {
             let f0 = metrics::frames();
             sleep(cx, 3000).await;
             println!(
-                "RESULT idle: busy={:.2}ms over 3s, frames={}",
+                "RESULT idle: busy={:.2}ms over 3s, frames={}, footprint at 3s={:.0}MB",
                 ms(metrics::busy_ns() - b0),
-                metrics::frames() - f0
+                metrics::frames() - f0,
+                metrics::footprint_mb().0,
             );
+            sleep(cx, 9000).await;
+            println!("RESULT idle-12s: footprint={:.0}MB", metrics::footprint_mb().0);
         }
         "goto" => {
             let line: usize = std::env::var("FUMI_LINE").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
@@ -380,7 +384,7 @@ async fn run(scenario: &str, window: WindowHandle<Editor>, cx: &mut AsyncApp) {
                     find_line(
                         e,
                         |k| if want_table { k == Kind::TableRow } else { k == Kind::Para },
-                        40,
+                        if want_table { 15 } else { 40 },
                     )
                 })
                 .unwrap();
@@ -497,19 +501,36 @@ async fn run(scenario: &str, window: WindowHandle<Editor>, cx: &mut AsyncApp) {
             metrics::record_frames(true);
             let t = Instant::now();
             let mut sent = 0u32;
+            let mut dir = 1;
+            let mut last = top0;
+            let mut still = 0;
+            let mut furthest = top0;
             while t.elapsed() < Duration::from_secs(secs) {
-                post_scroll(step_px);
+                post_scroll(step_px * dir);
                 sent += 1;
                 sleep(cx, 8).await;
+                // Short notes run out of document: turn around, keep sampling.
+                let at = window
+                    .update(cx, |e, _, _| e.list.logical_scroll_top())
+                    .unwrap();
+                let key = at.item_ix;
+                furthest = furthest.max(key);
+                still = if key == last && at.offset_in_item == px(0.) { still + 1 } else { 0 };
+                let _ = still;
+                last = key;
+                if key == 0 && dir == -1 {
+                    dir = 1;
+                }
+                if window.update(cx, |e, _, _| e.list.is_scrolled_to_end()).unwrap() == Some(true) {
+                    dir = -1;
+                }
             }
             sleep(cx, 100).await;
             metrics::record_frames(false);
             let frames = metrics::take_frames();
             let slices = metrics::take_slices();
             let elapsed = t.elapsed().as_secs_f64();
-            let top1 = window
-                .update(cx, |e, _, _| e.list.logical_scroll_top().item_ix)
-                .unwrap();
+            let top1 = furthest;
             let items = window.update(cx, |e, _, _| e.items.len()).unwrap();
             let mut draws: Vec<f64> = frames.iter().map(|f| ms(f.1)).collect();
             let gaps: Vec<f64> = frames.windows(2).map(|w| ms(w[1].0 - w[0].0)).collect();

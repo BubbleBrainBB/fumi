@@ -351,6 +351,7 @@ impl Editor {
     /// After the caret moved: fold what it left, unfold what it entered, and
     /// have the two lines whose syntax changed visibility measured again.
     fn caret_moved(&mut self, scroll: bool) {
+        metrics::note_change();
         let line = self.doc.line_of(self.head);
         let prev = self.caret_line;
         let block = self.foldable_block_at(line);

@@ -22,6 +22,9 @@ static LAST_FRAME_END: AtomicU64 = AtomicU64::new(0);
 static LAST_HANDLER: AtomicU64 = AtomicU64::new(0);
 static LOAD_ROPE: AtomicU64 = AtomicU64::new(0);
 static LOAD_SCAN: AtomicU64 = AtomicU64::new(0);
+static CHANGE_SEQ: AtomicU64 = AtomicU64::new(0);
+static RENDER_SEQ: AtomicU64 = AtomicU64::new(0);
+static PAINT_SEQ: AtomicU64 = AtomicU64::new(0);
 static RECORD: AtomicBool = AtomicBool::new(false);
 static FRAMES: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
 static SLICES: Mutex<Vec<u64>> = Mutex::new(Vec::new());
@@ -32,8 +35,21 @@ pub fn now() -> u64 {
     s.get_or_insert_with(Instant::now).elapsed().as_nanos() as u64
 }
 
+/// The caret or text changed. Paired with `painted_change`, this tells a frame
+/// that shows the change from one that merely happened to come along.
+pub fn note_change() {
+    CHANGE_SEQ.fetch_add(1, Relaxed);
+}
+pub fn change_seq() -> u64 {
+    CHANGE_SEQ.load(Relaxed)
+}
+pub fn painted_change() -> u64 {
+    PAINT_SEQ.load(Relaxed)
+}
+
 pub fn frame_begin() {
     FRAME_T0.store(now(), Relaxed);
+    RENDER_SEQ.store(CHANGE_SEQ.load(Relaxed), Relaxed);
 }
 
 pub fn frame_end() {
@@ -41,6 +57,7 @@ pub fn frame_end() {
     let draw = t.saturating_sub(FRAME_T0.load(Relaxed));
     LAST_DRAW.store(draw, Relaxed);
     LAST_FRAME_END.store(t, Relaxed);
+    PAINT_SEQ.store(RENDER_SEQ.load(Relaxed), Relaxed);
     FRAME_COUNT.fetch_add(1, Relaxed);
     if RECORD.load(Relaxed) {
         FRAMES.lock().unwrap().push((t, draw));
