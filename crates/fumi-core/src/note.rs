@@ -46,6 +46,11 @@ pub struct LibraryFile {
 }
 
 impl LibraryFile {
+    /// The file name with its extension (`cover.jpg`).
+    pub fn name(&self) -> String {
+        self.path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+    }
+
     /// The kind of file a path names, by extension; `None` for anything else.
     pub fn kind_of(path: &std::path::Path) -> Option<FileKind> {
         let ext = path.extension()?.to_string_lossy().to_lowercase();

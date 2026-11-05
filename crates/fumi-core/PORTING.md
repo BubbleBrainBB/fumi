@@ -13,3 +13,9 @@ Swift sources are in `~/bubble/notes-app/Fumi` and tests in `~/bubble/notes-app/
 - **Dependencies.** Prefer what's in `Cargo.toml`. Add one only if it clearly earns its place, and name it in your report. Check its license is compatible with MIT (no GPL or AGPL).
 - **Dates.** Keep them as seconds since the Unix epoch. No date crate: put small calendar helpers in the module that needs them, and take "now" and the UTC offset as arguments so tests are deterministic.
 - **Cargo.** Run `cargo test -p fumi-core --offline`; three people are porting at once, so run only your module's tests while working (`cargo test -p fumi-core --offline <module>::`). crates.io is flaky from this machine through the proxy.
+
+## Known follow-ups
+
+- `fuzzy_search::foundation` and `frontmatter::text` overlap; merge them into one module.
+- CRLF notes: titles, wiki links, outlines and card summaries treat `\r\n` as a line end (fixing a Swift bug), but `merge3` still treats a CRLF note as one line, and `memo_format` shows no memos in a pure CRLF day file (both as in Swift). Nothing is lost; decide when memos and sync get a UI.
+- `Doc::from_bytes` keeps a BOM, while these modules expect text without one. The editor must strip it before calling them.
