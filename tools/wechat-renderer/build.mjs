@@ -12,7 +12,7 @@ import esbuild from 'esbuild';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '../..');
 const src = path.join(here, 'src');
-const out = path.join(repo, 'Fumi/Resources/WeChat');
+const out = path.join(repo, 'crates/fumi-publish/resources/WeChat');
 
 const shims = { fs: 'fs.mjs', path: 'path.mjs', crypto: 'crypto.mjs', url: 'url.mjs', module: 'module.mjs' };
 const nodeShims = {

@@ -3,7 +3,7 @@ import AppKit
 // Regenerate the app icon:
 //
 //     swiftc Tools/make_app_icon.swift -o /tmp/make_app_icon
-//     /tmp/make_app_icon Fumi/Resources/Assets.xcassets/AppIcon.appiconset
+//     /tmp/make_app_icon resources/AppIcon.appiconset
 //
 // App icon, design board 65 option H: an ensō, one brush stroke of ink on
 // paper. Drawn as vectors at every size on the macOS icon grid (824pt body on
