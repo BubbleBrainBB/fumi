@@ -376,9 +376,9 @@ impl Drop for VideoPlayer {
 extern "C" fn did_exit_full_screen(_: &Object, _: Sel, note: id) {
     unsafe {
         let window: id = msg_send![note, object];
+        // Hidden, not torn down: taking the view off the player while it plays
+        // makes it jump back. It goes when the player does.
         let _: () = msg_send![window, orderOut: nil];
-        let view: id = msg_send![window, contentView];
-        let _: () = msg_send![view, setPlayer: nil];
     }
 }
 

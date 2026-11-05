@@ -329,14 +329,10 @@ pub fn start(scenario: String, window: WindowHandle<Editor>, t0: Instant, read_m
 
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
-    fn CGWindowListCreateImage(
-        bounds: cocoa::foundation::NSRect,
-        options: u32,
-        window: u32,
-        image: u32,
-    ) -> *mut std::ffi::c_void;
     fn CGImageRelease(image: *mut std::ffi::c_void);
 }
+
+type WindowImage = unsafe extern "C" fn(cocoa::foundation::NSRect, u32, u32, u32) -> *mut std::ffi::c_void;
 
 /// Saves this process's own window as a PNG, so a script can look at its result.
 fn self_shot(path: &str) -> bool {
@@ -346,8 +342,15 @@ fn self_shot(path: &str) -> bool {
             NSPoint::new(f64::INFINITY, f64::INFINITY),
             cocoa::foundation::NSSize::new(0., 0.),
         );
+        // Found at run time: the SDK has retired it, and a dev tool mustn't be
+        // what stops the app launching on a system without it.
+        let symbol = libc::dlsym(libc::RTLD_DEFAULT, c"CGWindowListCreateImage".as_ptr());
+        if symbol.is_null() {
+            return false;
+        }
+        let create: WindowImage = std::mem::transmute(symbol);
         // Including this window; ignoring its frame shadow.
-        let image = CGWindowListCreateImage(null, 8, number as u32, 1);
+        let image = create(null, 8, number as u32, 1);
         if image.is_null() {
             return false;
         }
@@ -410,6 +413,33 @@ async fn run_script(window: WindowHandle<Editor>, cx: &mut AsyncApp) {
                     e.paste_board(board, cx)
                 });
             }
+            "windows" => unsafe {
+                let app: id = msg_send![class!(NSApplication), sharedApplication];
+                let windows: id = msg_send![app, windows];
+                let count: NSUInteger = msg_send![windows, count];
+                for i in 0..count {
+                    let w: id = msg_send![windows, objectAtIndex: i];
+                    let (visible, key): (bool, bool) = (msg_send![w, isVisible], msg_send![w, isKeyWindow]);
+                    let mask: u64 = msg_send![w, styleMask];
+                    if visible {
+                        println!("STATE window {i} key={key} fullscreen={}", mask & (1 << 14) != 0);
+                    }
+                }
+            },
+            "esc" => unsafe {
+                // To whichever window has the keyboard.
+                let app: id = msg_send![class!(NSApplication), sharedApplication];
+                let w: id = msg_send![app, keyWindow];
+                let number: isize = msg_send![w, windowNumber];
+                for kind in [NS_KEY_DOWN, NS_KEY_UP] {
+                    let ev: id = msg_send![class!(NSEvent),
+                        keyEventWithType: kind location: NSPoint::new(10., 10.) modifierFlags: 0u64
+                        timestamp: 0f64 windowNumber: number context: nil
+                        characters: ns("\u{1b}") charactersIgnoringModifiers: ns("\u{1b}")
+                        isARepeat: false keyCode: 53u16];
+                    let _: () = msg_send![app, postEvent: ev atStart: false];
+                }
+            },
             "lines" => {
                 let text = window.update(cx, |e, _, _| {
                     let (a, b) = (n[0] as usize, (n[1] as usize).min(e.doc.line_count()));
