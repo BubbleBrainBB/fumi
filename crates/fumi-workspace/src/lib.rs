@@ -15,6 +15,8 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+pub mod libraries;
+
 pub fn now() -> Now {
     let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64();
     Now::new(secs, local_utc_offset(secs as i64))
@@ -37,6 +39,18 @@ pub fn new_tab_id() -> String {
     format!("{:08X}-{:04X}-4{:03X}-8{:03X}-{:012X}", (t >> 32) as u32, (t >> 16) as u16, pid & 0xFFF, n & 0xFFF, t & 0xFFFF_FFFF_FFFF)
 }
 
+/// What a new window opens on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WindowStart {
+    /// The first window of a launch: the library last open, or the page saying
+    /// it's missing.
+    Restore,
+    /// A library asked for, as by Open in New Window.
+    Library(PathBuf),
+    /// The welcome page: what a new window shows with no library requested.
+    Empty,
+}
+
 /// What screens may want to react to beyond a redraw.
 #[derive(Clone, Debug)]
 pub enum WorkspaceEvent {
@@ -55,10 +69,17 @@ pub struct Workspace {
     watcher: Option<Watcher>,
     /// Bumps when the store's notes change, for views that cache from them.
     pub revision: u64,
+    /// The library that should be open but can't be found: the welcome page says
+    /// so instead of showing itself as if the notes were gone.
+    pub missing_workspace: Option<PathBuf>,
 }
 
 impl Workspace {
     pub fn new(cx: &mut Context<Self>) -> Self {
+        Self::starting(WindowStart::Restore, cx)
+    }
+
+    pub fn starting(start: WindowStart, cx: &mut Context<Self>) -> Self {
         let mut model = AppModel::new(new_tab_id);
         model.sort_mode = SortMode::from_raw(&settings::get_string(settings::keys::SORT_MODE).unwrap_or_default());
         let mut this = Workspace {
@@ -67,14 +88,23 @@ impl Workspace {
             links: Rc::new(WikiLinkIndex::new()),
             watcher: None,
             revision: 0,
+            missing_workspace: None,
         };
-        // A dev override, so tests never touch the library in Settings.
-        let start = std::env::var("FUMI_WORKSPACE").ok().or_else(|| {
-            let path = settings::workspace_path();
-            (!path.is_empty() && Path::new(&path).is_dir()).then_some(path)
-        });
-        if let Some(path) = start {
-            this.open_workspace(Path::new(&path), cx);
+        match start {
+            WindowStart::Restore => {
+                // A dev override, so tests never touch the library in Settings.
+                let last = std::env::var("FUMI_WORKSPACE").ok().unwrap_or_else(settings::workspace_path);
+                if !last.is_empty() {
+                    let path = PathBuf::from(last);
+                    if path.exists() {
+                        this.open_workspace(&path, cx);
+                    } else {
+                        this.missing_workspace = Some(path);
+                    }
+                }
+            }
+            WindowStart::Library(path) => this.open_workspace(&path, cx),
+            WindowStart::Empty => {}
         }
         // Reloads are debounced by the store; this drains the watcher and runs
         // what's due.
@@ -116,6 +146,9 @@ impl Workspace {
                 let change = w.store.apply_reload(&ticket, scan);
                 if change.applied && (change.notes_changed || change.files_changed) {
                     w.library_changed(cx);
+                } else {
+                    // An empty library still has to say it finished loading.
+                    cx.notify();
                 }
             });
         })
@@ -158,6 +191,7 @@ impl Workspace {
     }
 
     pub fn open_workspace(&mut self, path: &Path, cx: &mut Context<Self>) {
+        self.missing_workspace = None;
         let key = path.to_string_lossy().into_owned();
         // Only the library opened on purpose becomes the remembered one, not a
         // dev override.
@@ -165,6 +199,7 @@ impl Workspace {
             settings::set_string(settings::keys::WORKSPACE, &key);
             settings::note_recent_workspace(&key);
         }
+        libraries::with(|list| list.add(&key));
         self.store.open_workspace(path, load_pins(&key));
         self.watcher = Watcher::new(path);
         self.model.restore_tabs(&key, load_saved_tabs(&key));

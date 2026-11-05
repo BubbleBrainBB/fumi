@@ -26,6 +26,9 @@ pub enum Glyph {
     Phone,
     Back,
     Forward,
+    /// The tree's line-drawn folders, stroked thinner than the rest (1.15).
+    FolderClosed,
+    FolderOpen,
 }
 
 type Ctx = *mut c_void;
@@ -212,6 +215,38 @@ fn draw(glyph: Glyph, p: &Pen) {
         }
         Glyph::Back => p.line(&[(14.5, 6.), (8.5, 12.), (14.5, 18.)]),
         Glyph::Forward => p.line(&[(9.5, 6.), (15.5, 12.), (9.5, 18.)]),
+        Glyph::FolderClosed => {
+            p.m(3., 7.);
+            p.q(5., 5., 3., 5.);
+            p.l(9., 5.);
+            p.l(11., 7.);
+            p.l(19., 7.);
+            p.q(21., 9., 21., 7.);
+            p.l(21., 17.);
+            p.q(19., 19., 21., 19.);
+            p.l(5., 19.);
+            p.q(3., 17., 3., 19.);
+            p.z();
+        }
+        Glyph::FolderOpen => {
+            // The back panel with its tab...
+            p.m(3., 19.);
+            p.l(3., 7.);
+            p.q(5., 5., 3., 5.);
+            p.l(9., 5.);
+            p.l(11., 7.);
+            p.l(18., 7.);
+            p.q(20., 9., 20., 7.);
+            p.l(20., 10.);
+            // ...and the front flap, tilted open.
+            p.m(3., 19.);
+            p.l(5.6, 11.4);
+            p.q(7.5, 10., 6.1, 10.);
+            p.l(21., 10.);
+            p.l(18.6, 17.6);
+            p.q(16.7, 19., 18.2, 19.);
+            p.z();
+        }
         Glyph::More => {
             for x in [5.5, 12., 18.5] {
                 p.oval(x - 0.6, 11.4, 1.2, 1.2);
@@ -239,8 +274,9 @@ fn rasterize(glyph: Glyph, size: f32, color: Hsla) -> Option<Arc<RenderImage>> {
         CGContextScaleCTM(ctx, SCALE, -SCALE);
         let k = size as f64 / 24.;
         CGContextSetRGBStrokeColor(ctx, c.r as f64, c.g as f64, c.b as f64, c.a as f64);
-        CGContextSetLineWidth(ctx, 1.7 * k);
-        CGContextSetLineCap(ctx, 1);
+        let folder = matches!(glyph, Glyph::FolderClosed | Glyph::FolderOpen);
+        CGContextSetLineWidth(ctx, if folder { 1.15 } else { 1.7 * k });
+        CGContextSetLineCap(ctx, if folder { 0 } else { 1 });
         CGContextSetLineJoin(ctx, 1);
         draw(glyph, &Pen { c: ctx, k });
         CGContextStrokePath(ctx);
@@ -251,6 +287,61 @@ fn rasterize(glyph: Glyph, size: f32, color: Hsla) -> Option<Arc<RenderImage>> {
     }
     let buffer = image::RgbaImage::from_raw(px_size as u32, px_size as u32, pixels)?;
     Some(Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(buffer)])))
+}
+
+/// A Fumi glyph as a template `NSImage`, for the menu bar: AppKit tints it.
+/// The caller owns the image.
+pub fn template_image(g: Glyph, size: f32) -> cocoa::base::id {
+    use cocoa::base::{id, nil};
+    use cocoa::foundation::NSSize;
+    use objc::{class, msg_send, sel, sel_impl};
+    let px_size = (size as f64 * SCALE).ceil() as usize;
+    let mut pixels = vec![0u8; px_size * px_size * 4];
+    unsafe {
+        let space = CGColorSpaceCreateDeviceRGB();
+        let ctx = CGBitmapContextCreate(pixels.as_mut_ptr() as *mut c_void, px_size, px_size, 8, px_size * 4, space, 1);
+        CGColorSpaceRelease(space);
+        if ctx.is_null() {
+            return nil;
+        }
+        CGContextTranslateCTM(ctx, 0., px_size as f64);
+        CGContextScaleCTM(ctx, SCALE, -SCALE);
+        let k = size as f64 / 24.;
+        CGContextSetRGBStrokeColor(ctx, 0., 0., 0., 1.);
+        CGContextSetLineWidth(ctx, 1.7 * k);
+        CGContextSetLineCap(ctx, 1);
+        CGContextSetLineJoin(ctx, 1);
+        draw(g, &Pen { c: ctx, k });
+        CGContextStrokePath(ctx);
+        CGContextRelease(ctx);
+
+        let rep: id = msg_send![class!(NSBitmapImageRep), alloc];
+        let null: *mut *mut u8 = std::ptr::null_mut();
+        let rep: id = msg_send![rep,
+            initWithBitmapDataPlanes: null
+            pixelsWide: px_size as i64
+            pixelsHigh: px_size as i64
+            bitsPerSample: 8i64
+            samplesPerPixel: 4i64
+            hasAlpha: true
+            isPlanar: false
+            colorSpaceName: crate::native::ns("NSDeviceRGBColorSpace")
+            bytesPerRow: (px_size * 4) as i64
+            bitsPerPixel: 32i64];
+        if rep == nil {
+            return nil;
+        }
+        let data: *mut u8 = msg_send![rep, bitmapData];
+        std::ptr::copy_nonoverlapping(pixels.as_ptr(), data, pixels.len());
+        let points = NSSize::new(size as f64, size as f64);
+        let _: () = msg_send![rep, setSize: points];
+        let image: id = msg_send![class!(NSImage), alloc];
+        let image: id = msg_send![image, initWithSize: points];
+        let _: () = msg_send![image, addRepresentation: rep];
+        let _: () = msg_send![rep, release];
+        let _: () = msg_send![image, setTemplate: true];
+        image
+    }
 }
 
 thread_local! {

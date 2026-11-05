@@ -228,6 +228,45 @@ pub fn note_recent_workspace(path: &str) {
     set_strings(keys::RECENT_WORKSPACES, &list);
 }
 
+/// A value stored as data, as the Swift app keeps its encoded lists.
+pub fn get_data(key: &str) -> Option<Vec<u8>> {
+    unsafe {
+        let data = object(key);
+        if data == nil {
+            return None;
+        }
+        let is_data: bool = msg_send![data, isKindOfClass: class!(NSData)];
+        if !is_data {
+            return None;
+        }
+        let len: u64 = msg_send![data, length];
+        let bytes: *const u8 = msg_send![data, bytes];
+        Some(std::slice::from_raw_parts(bytes, len as usize).to_vec())
+    }
+}
+
+pub fn set_data(key: &str, value: &[u8]) {
+    unsafe {
+        let data: id = msg_send![class!(NSData), dataWithBytes: value.as_ptr() length: value.len() as u64];
+        let _: () = msg_send![defaults(), setObject: data forKey: ns(key)];
+    }
+}
+
+/// Reads `dictionary[sub]` as a string.
+pub fn get_dict_string(key: &str, sub: &str) -> Option<String> {
+    unsafe {
+        let dict = object(key);
+        if dict == nil {
+            return None;
+        }
+        let is_dict: bool = msg_send![dict, isKindOfClass: class!(NSDictionary)];
+        if !is_dict {
+            return None;
+        }
+        from_ns(msg_send![dict, objectForKey: ns(sub)])
+    }
+}
+
 /// Reads `dictionary[sub]` as data: how the Swift app keeps per-library values.
 pub fn get_dict_data(key: &str, sub: &str) -> Option<Vec<u8>> {
     unsafe {

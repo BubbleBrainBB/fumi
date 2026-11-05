@@ -6,6 +6,7 @@
 
 use std::cmp::Ordering;
 
+use crate::app_model::SortMode;
 use crate::library_list::last_path_component;
 use crate::library_move::{self, Refusal};
 use crate::note::{LibraryFile, Note};
@@ -43,6 +44,15 @@ impl<'a> NoteFolder<'a> {
 /// order they were passed in (the caller sorts them); folders and files are
 /// sorted by name the way Finder does.
 pub fn build<'a>(notes: &'a [Note], files: &'a [LibraryFile]) -> NoteFolder<'a> {
+    build_from(notes, files)
+}
+
+/// [`build`], over any selection of the store's notes and files, so sorting or
+/// filtering them first copies no text.
+pub fn build_from<'a>(
+    notes: impl IntoIterator<Item = &'a Note>,
+    files: impl IntoIterator<Item = &'a LibraryFile>,
+) -> NoteFolder<'a> {
     let mut root = NoteFolder::new("/".to_string(), String::new());
     for note in notes {
         folder_at(&mut root, &note.relative_path).notes.push(note);
@@ -52,6 +62,47 @@ pub fn build<'a>(notes: &'a [Note], files: &'a [LibraryFile]) -> NoteFolder<'a> 
     }
     sort_folders(&mut root);
     root
+}
+
+/// Whether something in the folder `relative_path` shows in the tree: everything
+/// but the Memos folder, which has its own page.
+pub fn is_in_tree(relative_path: &str) -> bool {
+    let memos = format!("/{}", crate::memo_format::FOLDER_NAME);
+    relative_path != memos && !relative_path.starts_with(&format!("{memos}/"))
+}
+
+/// The notes in the sidebar's order: pinned first, then by `mode`. Port of
+/// `NoteSorting.sorted`.
+pub fn sorted<'a>(notes: impl IntoIterator<Item = &'a Note>, mode: SortMode) -> Vec<&'a Note> {
+    let mut notes: Vec<&'a Note> = notes.into_iter().collect();
+    match mode {
+        SortMode::UpdatedDesc => {
+            notes.sort_by(|a, b| b.pinned.cmp(&a.pinned).then_with(|| b.updated_at.total_cmp(&a.updated_at)));
+        }
+        SortMode::CreatedDesc => {
+            notes.sort_by(|a, b| b.pinned.cmp(&a.pinned).then_with(|| b.created_at.total_cmp(&a.created_at)));
+        }
+        SortMode::TitleAsc => {
+            notes.sort_by_cached_key(|note| (!note.pinned, FinderOrder(note.filename())));
+        }
+    }
+    notes
+}
+
+/// A name that orders the way Finder lists names.
+#[derive(PartialEq, Eq)]
+struct FinderOrder(String);
+
+impl PartialOrd for FinderOrder {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for FinderOrder {
+    fn cmp(&self, other: &Self) -> Ordering {
+        localized_standard_compare(&self.0, &other.0)
+    }
 }
 
 /// The folder at `relative_path` under `root`, made as needed.

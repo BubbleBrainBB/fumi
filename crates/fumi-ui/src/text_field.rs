@@ -6,6 +6,7 @@ use crate::theme::t;
 use gpui::prelude::*;
 use gpui::*;
 use std::ops::Range;
+use std::rc::Rc;
 use unicode_segmentation::UnicodeSegmentation;
 
 actions!(
@@ -32,6 +33,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-shift-right", SelectWordRight, c),
         KeyBinding::new("cmd-left", Home, c),
         KeyBinding::new("cmd-right", End, c),
+        // A text view keeps ⌘↑ and ⌘↓, so they never reach the window's commands.
+        KeyBinding::new("cmd-up", Home, c),
+        KeyBinding::new("cmd-down", End, c),
         KeyBinding::new("home", Home, c),
         KeyBinding::new("end", End, c),
         KeyBinding::new("cmd-shift-left", SelectHome, c),
@@ -51,6 +55,25 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-enter", NewLine, c),
         KeyBinding::new("escape", Cancel, c),
     ]);
+}
+
+/// A field's text, laid out by its owner. Positions are relative to the field's
+/// top-left corner.
+pub trait FieldLayout {
+    fn height(&self) -> Pixels;
+    /// The byte offset nearest to a point.
+    fn index_at(&self, p: Point<Pixels>) -> usize;
+    /// Where the caret shows at byte `at`: its top-left, and its height.
+    fn caret(&self, at: usize) -> (Point<Pixels>, Pixels);
+    fn selection(&self, range: Range<usize>) -> Vec<Bounds<Pixels>>;
+    fn paint(&self, origin: Point<Pixels>, window: &mut Window, cx: &mut App);
+}
+
+/// Lets an owner style a field's text: several fonts and sizes in a run, live
+/// highlighting, its own line metrics. Called on every layout, so cache.
+pub trait FieldStyler {
+    fn layout(&self, text: &str, marked: Option<Range<usize>>, width: Pixels, window: &mut Window) -> Rc<dyn FieldLayout>;
+    fn placeholder(&self, text: &str, width: Pixels, window: &mut Window) -> Rc<dyn FieldLayout>;
 }
 
 /// What the field tells its owner. Up and Down only reach here on one line, or
@@ -82,6 +105,16 @@ pub struct TextField {
     pub line_height: Pixels,
     pub text_color: Option<Hsla>,
     pub placeholder_color: Option<Hsla>,
+    pub caret_color: Option<Hsla>,
+    pub selection_color: Option<Hsla>,
+    /// The field is at least this tall, and clicks anywhere in it land.
+    pub min_height: Pixels,
+    pub styler: Option<Rc<dyn FieldStyler>>,
+    /// Typed straight quotes curl and `--` becomes a dash, as a text view's
+    /// automatic substitutions do.
+    pub smart_punctuation: bool,
+    styled: Option<Rc<dyn FieldLayout>>,
+    goal_x: Option<Pixels>,
     undo: Vec<(String, usize)>,
     redo: Vec<(String, usize)>,
     layout: Option<ShapedLayout>,
@@ -120,6 +153,13 @@ impl TextField {
             line_height: px(18.),
             text_color: None,
             placeholder_color: None,
+            caret_color: None,
+            selection_color: None,
+            min_height: px(0.),
+            styler: None,
+            smart_punctuation: false,
+            styled: None,
+            goal_x: None,
             undo: Vec::new(),
             redo: Vec::new(),
             layout: None,
@@ -143,6 +183,10 @@ impl TextField {
         self.undo.clear();
         self.redo.clear();
         cx.notify();
+    }
+
+    pub fn move_to_end(&mut self, cx: &mut Context<Self>) {
+        self.set_head(self.text.len(), false, cx);
     }
 
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
@@ -235,11 +279,28 @@ impl TextField {
         if !extend {
             self.anchor = at;
         }
+        self.goal_x = None;
         self.caret_on = true;
         cx.notify();
     }
 
     fn vertical(&mut self, down: bool, extend: bool, cx: &mut Context<Self>) {
+        // Laid out by the owner: by visual rows, keeping the column.
+        if let Some(lines) = self.styled.clone().filter(|_| self.multiline) {
+            let (p, h) = lines.caret(self.head);
+            let goal = self.goal_x.unwrap_or(p.x);
+            let y = if down { p.y + h + px(1.) } else { p.y - px(1.) };
+            if y < px(0.) || y >= lines.height() {
+                cx.emit(if down { FieldEvent::MoveDown } else { FieldEvent::MoveUp });
+                let edge = if down { self.text.len() } else { 0 };
+                self.set_head(edge, extend, cx);
+                return;
+            }
+            let at = lines.index_at(point(goal, y));
+            self.set_head(at, extend, cx);
+            self.goal_x = Some(goal);
+            return;
+        }
         let on_edge = if !self.multiline {
             true
         } else if down {
@@ -265,6 +326,9 @@ impl TextField {
     }
 
     fn index_at(&self, p: Point<Pixels>) -> usize {
+        if let (Some(lines), Some(bounds)) = (&self.styled, self.bounds) {
+            return floor_boundary(&self.text, lines.index_at(p - bounds.origin).min(self.text.len()));
+        }
         let (Some(layout), Some(bounds)) = (&self.layout, self.bounds) else { return self.head };
         let mut y = bounds.top();
         let lh = layout.line_height;
@@ -286,6 +350,19 @@ impl TextField {
         } else {
             cx.emit(FieldEvent::Submit);
         }
+    }
+}
+
+/// What a typed character becomes under smart punctuation: how many bytes before
+/// it to take back, and the text to put in.
+pub fn smart_substitution(before: &str, typed: &str) -> Option<(usize, String)> {
+    let prev = before.chars().next_back();
+    let opens = prev.is_none_or(|c| c.is_whitespace() || matches!(c, '(' | '[' | '{' | '“' | '‘' | '—' | '–' | '-'));
+    match typed {
+        "\"" => Some((0, if opens { "“" } else { "”" }.to_string())),
+        "'" => Some((0, if opens { "‘" } else { "’" }.to_string())),
+        "-" if prev == Some('-') => Some((1, "—".to_string())),
+        _ => None,
     }
 }
 
@@ -349,6 +426,13 @@ impl EntityInputHandler for TextField {
             .map(|r| self.from_utf16(r.start)..self.from_utf16(r.end))
             .or(self.marked.clone())
             .unwrap_or_else(|| self.selection());
+        if self.smart_punctuation
+            && self.marked.is_none()
+            && let Some((back, new)) = smart_substitution(&self.text[..range.start], text)
+        {
+            self.replace(range.start - back..range.end, &new, cx);
+            return;
+        }
         if !self.multiline && text.contains('\n') {
             let single = text.replace('\n', " ");
             self.replace(range, &single, cx);
@@ -388,6 +472,10 @@ impl EntityInputHandler for TextField {
 
     fn bounds_for_range(&mut self, range: Range<usize>, _: Bounds<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<Bounds<Pixels>> {
         let bounds = self.bounds?;
+        if let Some(lines) = &self.styled {
+            let (p, h) = lines.caret(self.from_utf16(range.start));
+            return Some(Bounds::new(bounds.origin + p, size(px(1.), h)));
+        }
         let layout = self.layout.as_ref()?;
         let at = self.from_utf16(range.start);
         let p = caret_position(layout, at)?;
@@ -557,6 +645,7 @@ impl IntoElement for FieldText {
 struct FieldPrepaint {
     lines: Vec<(WrappedLine, usize)>,
     placeholder: bool,
+    styled: Option<Rc<dyn FieldLayout>>,
 }
 
 impl Element for FieldText {
@@ -587,12 +676,29 @@ impl Element for FieldText {
                 AvailableSpace::Definite(w) => w,
                 _ => px(300.),
             });
-            let (text, multiline, font_size, lh) = {
+            let (text, multiline, font_size, lh, min_height, styler, marked, placeholder) = {
                 let t = field.read(cx);
-                (t.text.clone(), t.multiline, t.font_size, t.line_height)
+                (
+                    t.text.clone(),
+                    t.multiline,
+                    t.font_size,
+                    t.line_height,
+                    t.min_height,
+                    t.styler.clone(),
+                    t.marked.clone(),
+                    t.placeholder.clone(),
+                )
             };
+            if let Some(styler) = styler {
+                let lines = if text.is_empty() {
+                    styler.placeholder(&placeholder, width, window)
+                } else {
+                    styler.layout(&text, marked, width, window)
+                };
+                return size(width, lines.height().max(min_height));
+            }
             if !multiline {
-                return size(width, lh);
+                return size(width, lh.max(min_height));
             }
             let run = TextRun {
                 len: text.len(),
@@ -607,7 +713,7 @@ impl Element for FieldText {
                 .shape_text(SharedString::from(text.clone()), font_size, &[run], Some(width), None)
                 .map(|lines| lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum::<usize>())
                 .unwrap_or(1);
-            size(width, lh * rows.max(1) as f32)
+            size(width, (lh * rows.max(1) as f32).max(min_height))
         });
         let _ = cx;
         (id, ())
@@ -626,6 +732,15 @@ impl Element for FieldText {
         let field = self.field.read(cx);
         let font = window.text_style().font();
         let placeholder = field.text.is_empty();
+        if let Some(styler) = field.styler.clone() {
+            let (text, marked, hint) = (field.text.clone(), field.marked.clone(), field.placeholder.clone());
+            let styled = if placeholder {
+                styler.placeholder(&hint, bounds.size.width, window)
+            } else {
+                styler.layout(&text, marked, bounds.size.width, window)
+            };
+            return FieldPrepaint { lines: Vec::new(), placeholder, styled: Some(styled) };
+        }
         let (text, color): (SharedString, Hsla) = if placeholder {
             (field.placeholder.clone(), field.placeholder_color.unwrap_or(c.faint_text))
         } else {
@@ -666,7 +781,7 @@ impl Element for FieldText {
             lines.push((line, at));
             at += len + 1;
         }
-        FieldPrepaint { lines, placeholder }
+        FieldPrepaint { lines, placeholder, styled: None }
     }
 
     fn paint(
@@ -680,12 +795,31 @@ impl Element for FieldText {
         cx: &mut App,
     ) {
         let c = t();
-        let (focus, anchor, head, caret_on, lh) = {
+        let (focus, anchor, head, caret_on, lh, caret_color, selection_color) = {
             let f = self.field.read(cx);
-            (f.focus.clone(), f.anchor, f.head, f.caret_on, f.line_height)
+            (f.focus.clone(), f.anchor, f.head, f.caret_on, f.line_height, f.caret_color, f.selection_color)
         };
+        let (caret_color, selection_color) = (caret_color.unwrap_or(c.accent), selection_color.unwrap_or(c.selection));
         window.handle_input(&focus, ElementInputHandler::new(bounds, self.field.clone()), cx);
         let focused = focus.is_focused(window);
+        if let Some(styled) = prepaint.styled.take() {
+            if focused && anchor != head && !prepaint.placeholder {
+                for rect in styled.selection(anchor.min(head)..anchor.max(head)) {
+                    window.paint_quad(fill(Bounds::new(bounds.origin + rect.origin, rect.size), selection_color));
+                }
+            }
+            styled.paint(bounds.origin, window, cx);
+            if focused && caret_on && anchor == head {
+                let (p, h) = styled.caret(if prepaint.placeholder { 0 } else { head });
+                window.paint_quad(fill(Bounds::new(bounds.origin + p, size(px(1.5), h)), caret_color));
+            }
+            self.field.update(cx, |f, _| {
+                f.layout = None;
+                f.styled = Some(styled);
+                f.bounds = Some(bounds);
+            });
+            return;
+        }
         let layout = ShapedLayout {
             lines: std::mem::take(&mut prepaint.lines),
             line_height: lh,
@@ -712,7 +846,7 @@ impl Element for FieldText {
                                     point(bounds.left() + x0, y + row_y),
                                     point(bounds.left() + x1, y + row_y + lh),
                                 ),
-                                c.selection,
+                                selection_color,
                             ));
                             row_y += lh;
                         }
@@ -732,7 +866,7 @@ impl Element for FieldText {
             if let Some(p) = p {
                 window.paint_quad(fill(
                     Bounds::new(bounds.origin + p + point(px(0.), px(1.)), size(px(1.5), lh - px(2.))),
-                    c.accent,
+                    caret_color,
                 ));
             }
         }
@@ -740,5 +874,26 @@ impl Element for FieldText {
             f.layout = Some(layout);
             f.bounds = Some(bounds);
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::smart_substitution;
+
+    #[core::prelude::v1::test]
+    fn quotes_curl_by_what_is_before_them() {
+        assert_eq!(smart_substitution("", "\""), Some((0, "“".into())));
+        assert_eq!(smart_substitution("say ", "\""), Some((0, "“".into())));
+        assert_eq!(smart_substitution("say", "\""), Some((0, "”".into())));
+        assert_eq!(smart_substitution("don", "'"), Some((0, "’".into())));
+        assert_eq!(smart_substitution("(", "'"), Some((0, "‘".into())));
+    }
+
+    #[core::prelude::v1::test]
+    fn two_hyphens_make_a_dash() {
+        assert_eq!(smart_substitution("a-", "-"), Some((1, "—".into())));
+        assert_eq!(smart_substitution("a", "-"), None);
+        assert_eq!(smart_substitution("a", "b"), None);
     }
 }
