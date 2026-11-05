@@ -400,6 +400,9 @@ pub enum MenuRow {
     Submenu { title: String, rows: Vec<MenuRow> },
     /// A row that can't be clicked, as a section label.
     Label(String),
+    /// One choice of a pop-up: checked when it's the current one, with an
+    /// optional `NSImage` beside it. Counts as an item.
+    Choice { title: String, checked: bool, image: Option<id> },
 }
 
 impl MenuRow {
@@ -480,6 +483,22 @@ fn build_menu(rows: &[MenuRow], target: id, next_tag: &mut i64) -> id {
                     }
                     let _: () = msg_send![menu, addItem: item];
                 }
+                MenuRow::Choice { title, checked, image } => {
+                    let item: id = msg_send![class!(NSMenuItem), alloc];
+                    let item: id = msg_send![item,
+                        initWithTitle: ns(title)
+                        action: sel!(fumiMenuAction:)
+                        keyEquivalent: ns("")];
+                    let _: () = msg_send![item, setTarget: target];
+                    let _: () = msg_send![item, setTag: *next_tag];
+                    *next_tag += 1;
+                    let _: () = msg_send![item, setEnabled: true];
+                    let _: () = msg_send![item, setState: if *checked { 1i64 } else { 0i64 }];
+                    if let Some(image) = image {
+                        let _: () = msg_send![item, setImage: *image];
+                    }
+                    let _: () = msg_send![menu, addItem: item];
+                }
                 MenuRow::Submenu { title, rows } => {
                     let item: id = msg_send![class!(NSMenuItem), alloc];
                     let item: id = msg_send![item, initWithTitle: ns(title) action: nil keyEquivalent: ns("")];
@@ -495,10 +514,20 @@ fn build_menu(rows: &[MenuRow], target: id, next_tag: &mut i64) -> id {
 
 /// Shows a native menu at `position` (window coordinates, top-left origin) and
 /// waits for it to close. Returns the index of the chosen item, counting only
-/// `Item` rows in reading order, submenus included.
+/// `Item` and `Choice` rows in reading order, submenus included.
+///
+/// Menu tracking runs a nested run loop. Called from an event handler, that loop
+/// also drains the main dispatch queue, where a pending task's `App` borrow panics
+/// against the one the handler holds (the workspace's poll fires every 150 ms).
+/// Call it from a spawned foreground task through [`popup_menu_on`]: inside a main
+/// queue block the nested loop leaves the queue alone.
 pub fn popup_menu(window: &Window, rows: &[MenuRow], position: Point<Pixels>) -> Option<usize> {
+    popup_menu_on(ns_window_of(window), rows, position)
+}
+
+/// `popup_menu` by `NSWindow`, for spawned tasks, which hold no `&Window`.
+pub fn popup_menu_on(ns_win: id, rows: &[MenuRow], position: Point<Pixels>) -> Option<usize> {
     unsafe {
-        let ns_win = ns_window_of(window);
         if ns_win == nil {
             return None;
         }
@@ -517,5 +546,109 @@ pub fn popup_menu(window: &Window, rows: &[MenuRow], position: Point<Pixels>) ->
         let _: () = msg_send![target, release];
         let chosen = CHOSEN.load(AtomicOrdering::SeqCst);
         (chosen >= 0).then_some(chosen as usize)
+    }
+}
+
+// Panels ----------------------------------------------------------------------
+
+/// The "Open Notes Folder" panel, shared by the welcome page, Settings and ⌘O.
+/// `start` opens it at that folder, or at its nearest parent that still exists.
+/// Blocks in a modal loop, so call it from a spawned task, as with `popup_menu_on`.
+pub fn choose_notes_folder(start: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
+    unsafe {
+        let panel: id = msg_send![class!(NSOpenPanel), openPanel];
+        if panel == nil {
+            return None;
+        }
+        if let Some(mut dir) = start.map(std::path::Path::to_path_buf) {
+            while !dir.exists() {
+                let Some(parent) = dir.parent().map(std::path::Path::to_path_buf) else { break };
+                dir = parent;
+            }
+            let url: id = msg_send![class!(NSURL), fileURLWithPath: ns(&dir.to_string_lossy())];
+            let _: () = msg_send![panel, setDirectoryURL: url];
+        }
+        let _: () = msg_send![panel, setTitle: ns("Open Notes Folder")];
+        let _: () = msg_send![panel, setCanChooseDirectories: true];
+        let _: () = msg_send![panel, setCanChooseFiles: false];
+        let _: () = msg_send![panel, setCanCreateDirectories: true];
+        let _: () = msg_send![panel, setAllowsMultipleSelection: false];
+        let _: () = msg_send![panel, setPrompt: ns("Open")];
+        let answer: i64 = msg_send![panel, runModal];
+        if answer != 1 {
+            return None;
+        }
+        let url: id = msg_send![panel, URL];
+        path_of_url(url)
+    }
+}
+
+/// A file URL's path.
+pub fn path_of_url(url: id) -> Option<std::path::PathBuf> {
+    unsafe {
+        if url == nil {
+            return None;
+        }
+        let path: id = msg_send![url, path];
+        if path == nil {
+            return None;
+        }
+        let utf8: *const std::os::raw::c_char = msg_send![path, UTF8String];
+        (!utf8.is_null()).then(|| std::path::PathBuf::from(std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned()))
+    }
+}
+
+// Sounds, haptics, panels -----------------------------------------------------
+
+/// The system alert sound.
+pub fn beep() {
+    #[link(name = "AppKit", kind = "framework")]
+    unsafe extern "C" {
+        fn NSBeep();
+    }
+    unsafe { NSBeep() }
+}
+
+/// The trackpad tick of `NSHapticFeedbackManager`'s `.alignment` pattern.
+pub fn haptic_alignment() {
+    unsafe {
+        let performer: id = msg_send![class!(NSHapticFeedbackManager), defaultPerformer];
+        // NSHapticFeedbackPatternAlignment, NSHapticFeedbackPerformanceTimeNow.
+        let _: () = msg_send![performer, performFeedbackPattern: 1i64 performanceTime: 1u64];
+    }
+}
+
+/// What AppKit says about the scroll event being handled right now, which GPUI's
+/// own event leaves out: momentum has no phase, and which way the fingers moved.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScrollGesture {
+    /// `NSEventPhase.began`.
+    pub began: bool,
+    /// `NSEventPhase.changed`.
+    pub changed: bool,
+    /// `isDirectionInvertedFromDevice`: natural scrolling.
+    pub inverted: bool,
+    pub delta_x: f64,
+    pub delta_y: f64,
+}
+
+/// `NSApp.currentEvent`, when it's a scroll.
+pub fn current_scroll_gesture() -> Option<ScrollGesture> {
+    unsafe {
+        let app: id = msg_send![class!(NSApplication), sharedApplication];
+        let event: id = msg_send![app, currentEvent];
+        if event == nil {
+            return None;
+        }
+        // NSEventTypeScrollWheel.
+        let kind: u64 = msg_send![event, type];
+        if kind != 22 {
+            return None;
+        }
+        let phase: u64 = msg_send![event, phase];
+        let inverted: bool = msg_send![event, isDirectionInvertedFromDevice];
+        let delta_x: f64 = msg_send![event, scrollingDeltaX];
+        let delta_y: f64 = msg_send![event, scrollingDeltaY];
+        Some(ScrollGesture { began: phase & 1 != 0, changed: phase & 4 != 0, inverted, delta_x, delta_y })
     }
 }

@@ -1507,15 +1507,20 @@ dependencies = [
  "cocoa 0.26.1",
  "fumi-core",
  "fumi-ui",
+ "futures",
  "gpui-pre",
+ "gpui-pre-platform",
  "image",
  "libc",
  "objc",
+ "objc2-core-foundation",
+ "objc2-core-video",
  "ratex-gpui",
  "regex",
  "ropey",
  "sha2 0.10.9",
  "smallvec",
+ "tempfile",
  "unicode-segmentation",
 ]
 
@@ -1542,23 +1547,33 @@ dependencies = [
 name = "fumi-memos"
 version = "0.1.0"
 dependencies = [
+ "block",
+ "cocoa 0.26.1",
  "fumi-core",
+ "fumi-editor",
  "fumi-ui",
  "fumi-workspace",
+ "futures",
  "gpui-pre",
  "gpui-pre-platform",
+ "objc",
  "smallvec",
+ "unicode-segmentation",
 ]
 
 [[package]]
 name = "fumi-settings"
 version = "0.1.0"
 dependencies = [
+ "cocoa 0.26.1",
  "fumi-core",
  "fumi-ui",
  "fumi-workspace",
  "gpui-pre",
  "gpui-pre-platform",
+ "libc",
+ "objc",
+ "raw-window-handle",
  "smallvec",
 ]
 
@@ -1578,12 +1593,15 @@ dependencies = [
 name = "fumi-toolbar"
 version = "0.1.0"
 dependencies = [
+ "cocoa 0.26.1",
  "fumi-core",
  "fumi-ui",
  "fumi-workspace",
  "gpui-pre",
  "gpui-pre-platform",
+ "objc",
  "smallvec",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -3381,6 +3399,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d425caf1df73233f29fd8a5c3e5edbc30d2d4307870f802d18f00d83dc5141a6"
 dependencies = [
  "bitflags 2.13.2",
+ "block2 0.6.2",
  "objc2 0.6.5",
  "objc2-core-foundation",
  "objc2-core-graphics",
