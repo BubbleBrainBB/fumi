@@ -64,6 +64,12 @@ impl PageHost {
                     this.take_outside_changes(cx);
                 }
             }),
+            // Quitting inside the half second before a save would lose what was
+            // typed in it: write every tab first.
+            cx.on_app_quit(|this, cx| {
+                this.flush_all(cx);
+                async {}
+            }),
         ];
         let empty = cx.new(|cx| EmptyLibraryPage::new(workspace.clone(), cx));
         PageHost {
@@ -282,6 +288,13 @@ impl PageHost {
 
     /// Writes the tab's text if it has unsaved changes. Refused saves leave the
     /// file alone and say why.
+    pub fn flush_all(&mut self, cx: &mut Context<Self>) {
+        let tabs: Vec<String> = self.pages.keys().cloned().collect();
+        for tab in tabs {
+            self.flush(&tab, cx);
+        }
+    }
+
     pub fn flush(&mut self, tab: &str, cx: &mut Context<Self>) {
         let Some(page) = self.pages.get_mut(tab) else { return };
         let editor = page.editor.read(cx);
