@@ -16,8 +16,10 @@ use std::time::Duration;
 
 /// The window's toolbar band, which the sidebar's column runs under.
 pub const BAND_HEIGHT: f32 = 52.;
-/// The sidebar button, on the traffic lights' line, just after them.
-pub const TOGGLE_LEFT: f32 = 80.;
+/// The sidebar button, on the traffic lights' line, after them with the gap a
+/// native toolbar item gets: its center 31 pt past the zoom button's, as measured
+/// against an AppKit toolbar on macOS 27.
+pub const TOGGLE_LEFT: f32 = 93.;
 pub const TOGGLE_SIZE: f32 = 28.;
 /// Leading and trailing inset of the sidebar's content.
 pub const INSET: f32 = 8.;
