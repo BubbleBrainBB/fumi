@@ -34,6 +34,7 @@ pub struct NotePage {
 
 pub struct PageHost {
     pub workspace: Entity<Workspace>,
+    window: AnyWindowHandle,
     pub pages: HashMap<String, NotePage>,
     /// The file on the active tab. Dropped otherwise: its native view would stay
     /// on screen.
@@ -67,6 +68,7 @@ impl PageHost {
         let empty = cx.new(|cx| EmptyLibraryPage::new(workspace.clone(), cx));
         PageHost {
             workspace,
+            window: window.window_handle(),
             pages: HashMap::new(),
             file: None,
             empty,
@@ -303,8 +305,9 @@ impl PageHost {
                 if let Some(copy) = saved.conflict_copy {
                     let workspace = self.workspace.clone();
                     let (id, name) = (copy.id.clone(), copy.filename());
+                    // On this page's window, whether or not it's the key one.
+                    let window = self.window;
                     cx.defer(move |cx| {
-                        let Some(window) = cx.active_window() else { return };
                         let _ = window.update(cx, |_, window, cx| {
                             fumi_toolbar::alerts::show_conflict_copy(id, &name, &workspace, window, cx);
                         });
@@ -341,17 +344,23 @@ impl PageHost {
             }
             let disk = self.workspace.read(cx).note(&page.note_id).map(|n| n.content.clone());
             let Some(disk) = disk else { continue };
-            let editor = page.editor.read(cx);
-            if disk == page.base || editor.marked.is_some() {
+            if disk == page.base {
                 continue;
             }
-            if editor.dirty {
-                // The next save merges; nothing to do until then.
+            if page.editor.read(cx).dirty {
+                // Typed here and changed outside: save now, which merges the two
+                // and puts the merge on screen.
+                self.flush(&tab, cx);
                 continue;
             }
             let page = self.pages.get_mut(&tab).expect("still here");
             page.base = disk.clone();
-            page.editor.update(cx, |e, cx| e.replace_from_outside(&disk, cx));
+            page.editor.update(cx, |e, cx| {
+                // No edits to keep: an input method composing loses its text, and
+                // the note comes in all the same.
+                e.marked = None;
+                e.replace_from_outside(&disk, cx);
+            });
         }
         self.refresh_links(cx);
     }

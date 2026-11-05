@@ -178,6 +178,9 @@ impl Fonts {
             let system: id = msg_send![class!(NSFont), systemFontOfSize: size weight: ns_weight(css)];
             let plain: id = match family {
                 ".SystemUIFont" => system,
+                ".AppleSystemUIFontMonospaced" => {
+                    msg_send![class!(NSFont), monospacedSystemFontOfSize: size weight: ns_weight(css)]
+                }
                 ".AppleSystemUIFontSerif" => {
                     let descriptor: id = msg_send![system, fontDescriptor];
                     let serif: id = msg_send![descriptor, fontDescriptorWithDesign: NSFontDescriptorSystemDesignSerif];

@@ -1,21 +1,10 @@
 //! Memo type: the editor's font, with Chinese in its paired face, and the system
 //! faces the rest of the page uses.
 
-use fumi_editor::display::{Composite, family_font};
+use fumi_editor::display::Composite;
+use fumi_ui::fonts::family_font;
 use fumi_ui::settings;
 use gpui::*;
-
-/// The system serif (New York). CoreText doesn't list it under its own name.
-pub const SERIF: &str = ".AppleSystemUIFontSerif";
-/// The system monospace (SF Mono), the same way.
-pub const MONO: &str = ".AppleSystemUIFontMonospaced";
-const CJK_FALLBACK: &str = "PingFang SC";
-
-fn with_fallback(family: &str) -> Font {
-    let mut f = font(family.to_string());
-    f.fallbacks = Some(FontFallbacks::from_fonts(vec![CJK_FALLBACK.into()]));
-    f
-}
 
 pub fn ui(weight: FontWeight) -> Font {
     let mut f = family_font("System");
@@ -24,7 +13,7 @@ pub fn ui(weight: FontWeight) -> Font {
 }
 
 pub fn serif(weight: FontWeight, italic: bool) -> Font {
-    let mut f = with_fallback(SERIF);
+    let mut f = family_font("New York");
     f.weight = weight;
     if italic {
         f.style = FontStyle::Italic;
@@ -33,7 +22,7 @@ pub fn serif(weight: FontWeight, italic: bool) -> Font {
 }
 
 pub fn mono() -> Font {
-    with_fallback(MONO)
+    family_font("SF Mono")
 }
 
 /// Monospaced digits, on any font.
@@ -69,11 +58,7 @@ impl MemoType {
     }
 
     pub fn font(&self, bold: bool, italic: bool) -> Font {
-        let mut f = match self.family.as_str() {
-            "New York" => with_fallback(SERIF),
-            "SF Mono" => mono(),
-            family => family_font(family),
-        };
+        let mut f = family_font(&self.family);
         if bold {
             f.weight = FontWeight::BOLD;
         }

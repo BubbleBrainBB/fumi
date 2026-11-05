@@ -8,10 +8,13 @@ use fumi_settings::search::SearchPanel;
 use fumi_settings::sheet::{OnChange, SettingsChange, SettingsSheet};
 use fumi_settings::welcome::{OnOpen, WelcomePage};
 use fumi_sidebar::{SidebarEvent, SidebarView};
+use fumi_toolbar::layout::Tween;
 use fumi_toolbar::{Toolbar, ToolbarEvent};
-use fumi_ui::native;
-use fumi_ui::theme::{self, t};
+use fumi_ui::theme::{self, mix, t};
+use fumi_ui::window_frame::WindowFrame;
+use fumi_ui::{native, settings};
 use fumi_workspace::{WindowStart, Workspace, WorkspaceEvent};
+use gpui::prelude::*;
 use gpui::*;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -23,6 +26,15 @@ pub const TOOLBAR_HEIGHT: f32 = 52.;
 /// The welcome page's plain sheet settling into the framed window.
 const REVEAL_DELAY_MS: u64 = 120;
 const REVEAL_MS: f32 = 500.;
+/// The welcome page and the shell trade places, each fading.
+const SWITCH: Duration = Duration::from_millis(200);
+
+/// The sidebar's width plus the detail column's minimum, which keeps the text
+/// column from reflowing as the sidebar comes and goes.
+pub fn min_window_size() -> Size<Pixels> {
+    let column = fumi_editor::editor::column_cap(&settings::editor_width());
+    size(px(240. + column + 40. * 2. + PAGE_INSET * 2.), px(600.))
+}
 
 pub struct RootView {
     pub workspace: Entity<Workspace>,
@@ -38,6 +50,8 @@ pub struct RootView {
     /// 0 is the plain sheet, 1 the framed page.
     frame: f32,
     was_open: bool,
+    /// 0 is the welcome page, 1 the shell.
+    shell: Tween,
     _subs: Vec<Subscription>,
 }
 
@@ -92,9 +106,21 @@ impl RootView {
                 this.toolbar_event(e, window, cx);
             }),
             cx.observe_window_appearance(window, |this, window, cx| this.apply_theme(window, cx)),
+            cx.observe_window_bounds(window, |_, window, cx| {
+                let bounds = window.window_bounds().get_bounds();
+                if let Some(display) = window.display(cx) {
+                    WindowFrame { display: display.id().into(), bounds }.save();
+                }
+            }),
         ];
         let focus = cx.focus_handle();
-        window.focus(&focus, cx);
+        // ↩ reaches the welcome page from the first frame.
+        let open = workspace.read(cx).store.is_open();
+        if open {
+            window.focus(&focus, cx);
+        } else {
+            welcome.update(cx, |welcome, cx| welcome.focus(window, cx));
+        }
         let mut this = RootView {
             workspace,
             pages,
@@ -107,7 +133,8 @@ impl RootView {
             backdrop: None,
             focus,
             frame: 1.,
-            was_open: false,
+            was_open: open,
+            shell: Tween::settled(if open { 1. } else { 0. }),
             _subs: subs,
         };
         this.apply_theme(window, cx);
@@ -116,7 +143,15 @@ impl RootView {
 
     fn settings_changed(&mut self, change: SettingsChange, window: &mut Window, cx: &mut Context<Self>) {
         match change {
-            SettingsChange::Appearance | SettingsChange::Writing => self.apply_theme(window, cx),
+            // Settings are the app's, not this window's: every window follows.
+            // Deferred, as this window is being updated right now.
+            SettingsChange::Appearance | SettingsChange::Writing => cx.defer(|cx| {
+                for handle in cx.windows() {
+                    if let Some(root) = handle.downcast::<RootView>() {
+                        let _ = root.update(cx, |root, window, cx| root.apply_theme(window, cx));
+                    }
+                }
+            }),
             SettingsChange::Publish => {
                 self.publish.update(cx, |p, cx| p.settings_changed(window, cx));
                 cx.notify();
@@ -154,6 +189,13 @@ impl RootView {
                     self.backdrop = None;
                 }
                 _ => {}
+            }
+            // Line Length moves the minimum; a window under it grows to fit.
+            let min = min_window_size();
+            native::set_content_min_size(ns_window, f32::from(min.width) as f64, f32::from(min.height) as f64);
+            let current = window.viewport_size();
+            if current.width < min.width && !window.is_fullscreen() {
+                window.resize(size(min.width, current.height));
             }
         }
         window.set_background_appearance(if tokens.glass {
@@ -200,13 +242,13 @@ impl RootView {
             .flex_1()
             .min_w_0()
             .h_full()
-            .bg(if f >= 1. { c.page_sheet } else { c.page })
+            .bg(mix(c.page, c.page_sheet, f))
             .overflow_hidden();
         if framed {
             sheet = sheet
                 .rounded(px(PAGE_RADIUS * f))
                 .border_1()
-                .border_color(c.page_edge.opacity(c.page_edge.a * f));
+                .border_color(c.page_edge.opacity(f));
             if !flat {
                 let shadow = |a: f32, y: f32, blur: f32| BoxShadow {
                     color: hsla(0., 0., 0., a * f),
@@ -222,11 +264,6 @@ impl RootView {
     }
 }
 
-fn mix(a: Hsla, b: Hsla, f: f32) -> Hsla {
-    let (a, b) = (Rgba::from(a), Rgba::from(b));
-    Rgba { r: a.r + (b.r - a.r) * f, g: a.g + (b.g - a.g) * f, b: a.b + (b.b - a.b) * f, a: a.a + (b.a - a.a) * f }.into()
-}
-
 impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = t();
@@ -239,9 +276,15 @@ impl Render for RootView {
             self.start_reveal(cx);
         }
         if !open && self.was_open {
-            self.welcome.clone().update(cx, |welcome, cx| welcome.focus(window, cx));
+            self.welcome.clone().update(cx, |welcome, cx| welcome.shown_again(window, cx));
         }
         self.was_open = open;
+        let now = Instant::now();
+        self.shell.go(if open { 1. } else { 0. }, SWITCH, now);
+        if self.shell.is_moving(now) {
+            window.request_animation_frame();
+        }
+        let shell = self.shell.value(now);
 
         let f = self.frame;
         let ground = mix(c.page, c.ground_fill, f);
@@ -261,13 +304,19 @@ impl Render for RootView {
             root.on_action(move |_: &fumi_toolbar::actions::ToggleSidebar, _, cx| {
                 toggle.update(cx, |s, cx| s.toggle_sidebar(cx))
             })
-            .on_action(move |_: &fumi_toolbar::actions::ShowLibraries, _, cx| {
-                libraries.update(cx, |s, cx| s.show_libraries(cx))
+            // Without a library there's nothing to show: the menu item greys out.
+            .when(open, |root| {
+                root.on_action(move |_: &fumi_toolbar::actions::ShowLibraries, _, cx| {
+                    libraries.update(cx, |s, cx| s.show_libraries(cx))
+                })
             })
+            .bg(mix(c.page, ground, shell))
         };
+        let layer = |opacity: f32| div().absolute().inset_0().opacity(opacity);
 
-        if !open {
-            return root.bg(c.page).child(self.welcome.clone());
+        let root = root.when(shell < 1., |root| root.child(layer(1. - shell).child(self.welcome.clone())));
+        if shell <= 0. {
+            return root;
         }
 
         let inset = px(PAGE_INSET * f);
@@ -291,9 +340,11 @@ impl Render for RootView {
             )
             // Painted after the page: the active tab's flare meets its top edge.
             .child(div().absolute().top_0().left_0().right_0().h(px(TOOLBAR_HEIGHT)).child(self.toolbar.clone()));
-        root.bg(ground)
-            .child(div().size_full().flex().child(self.sidebar.clone()).child(detail))
-            .child(self.search.clone())
-            .child(self.sheet.clone())
+        root.child(
+            layer(shell)
+                .child(div().size_full().flex().child(self.sidebar.clone()).child(detail))
+                .child(self.search.clone())
+                .child(self.sheet.clone()),
+        )
     }
 }

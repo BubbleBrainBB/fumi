@@ -14,12 +14,13 @@ use futures::StreamExt;
 use fumi_core::app_model::PublishTarget;
 use fumi_core::xhs_deck::XhsDeck;
 use fumi_toolbar::actions::{extension_wechat, extension_xhs};
+use fumi_toolbar::layout::Tween;
 use fumi_toolbar::toolbar::publish_target;
 use fumi_ui::icons;
 use fumi_ui::native::{self, MenuRow, weight};
 use fumi_ui::settings::{self, keys};
 use fumi_ui::text_field::{FieldEvent, TextField};
-use fumi_ui::theme::{hex, t, text_size};
+use fumi_ui::theme::{hex, mix, t, text_size};
 use fumi_workspace::Workspace;
 use gpui::prelude::*;
 use gpui::*;
@@ -200,6 +201,15 @@ fn tracked(cell: &Anchor) -> impl IntoElement {
     canvas(move |bounds, _, _| cell.set(bounds), |_, _, _, _| {}).absolute().size_full()
 }
 
+const PLATFORM_FADE: Duration = Duration::from_millis(150);
+
+fn target_index(target: PublishTarget) -> usize {
+    match target {
+        PublishTarget::Wechat => 0,
+        PublishTarget::Xiaohongshu => 1,
+    }
+}
+
 pub struct PublishPane {
     workspace: Entity<Workspace>,
     live: LiveText,
@@ -222,6 +232,9 @@ pub struct PublishPane {
     export_anchor: Anchor,
     cards_slot: Rc<Cell<Bounds<Pixels>>>,
     radius: f32,
+
+    /// How selected each platform name looks, by `target_index`.
+    platform_fade: Option<[Tween; 2]>,
 
     // WeChat
     article: Option<Article>,
@@ -299,6 +312,7 @@ impl PublishPane {
             }),
         ];
         let mut this = PublishPane {
+            platform_fade: None,
             workspace,
             live,
             focus: cx.focus_handle(),
@@ -1207,16 +1221,34 @@ impl PublishPane {
         cx.notify();
     }
 
+    /// Heads each platform name for what it should be now.
+    fn sync_platform_fade(&mut self, selected: PublishTarget, window: &mut Window) {
+        let now = Instant::now();
+        let weight = |target| if target == selected { 1. } else { 0. };
+        let targets = [PublishTarget::Wechat, PublishTarget::Xiaohongshu];
+        let fades = self.platform_fade.get_or_insert_with(|| targets.map(|target| Tween::settled(weight(target))));
+        for target in targets {
+            let fade = &mut fades[target_index(target)];
+            fade.go(weight(target), PLATFORM_FADE, now);
+            if fade.is_moving(now) {
+                window.request_animation_frame();
+            }
+        }
+    }
+
     fn platform_row(&self, selected: PublishTarget, cx: &mut Context<Self>) -> Div {
         let c = t();
+        let now = Instant::now();
         let (names, is_switch) = platform_names(extension_wechat(), extension_xhs(), selected);
         div().flex().items_center().gap(px(14.)).children(names.into_iter().map(|target| {
             let title = div().text_size(px(text_size::BODY)).font_weight(FontWeight::SEMIBOLD);
             if is_switch {
                 let is_selected = target == selected;
+                // Selection fades, 0.15 s; hover answers at once, as in Swift.
+                let weight = self.platform_fade.map_or(if is_selected { 1. } else { 0. }, |fades| fades[target_index(target)].value(now));
                 title
                     .id(platform_title(target))
-                    .text_color(if is_selected { c.text } else { c.faint_text })
+                    .text_color(mix(c.faint_text, c.text, weight))
                     .when(!is_selected, |el| el.hover(|s| s.text_color(c.text2)))
                     .on_click(cx.listener(move |this, _, _, cx| this.set_target(target, cx)))
                     .child(platform_title(target))
@@ -1720,6 +1752,7 @@ impl Focusable for PublishPane {
 impl Render for PublishPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let target = self.target(cx);
+        self.sync_platform_fade(target, window);
         match target {
             PublishTarget::Wechat => {
                 self.ensure_article_web(window, cx);

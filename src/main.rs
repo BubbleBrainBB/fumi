@@ -7,6 +7,7 @@ mod root;
 use fumi_editor::editor::{self, Editor, Quit};
 use fumi_editor::{driver, metrics};
 use fumi_toolbar::AppHooks;
+use fumi_ui::window_frame::{FIRST_SIZE, WindowFrame};
 use fumi_workspace::WindowStart;
 use gpui::*;
 use root::RootView;
@@ -24,12 +25,31 @@ fn main() {
     }
 }
 
+/// A fresh install's first window is centered at 1200 x 800. After that a launch's
+/// first window comes back where the last one was; later ones take its size, centered.
+fn opening_frame(start: &WindowStart, min: Size<Pixels>, cx: &App) -> (Bounds<Pixels>, Option<DisplayId>) {
+    let first_size = size(px(FIRST_SIZE.0), px(FIRST_SIZE.1));
+    let Some(saved) = WindowFrame::load() else {
+        return (Bounds::centered(None, first_size, cx), None);
+    };
+    let display = cx.displays().into_iter().find(|display| u64::from(display.id()) == saved.display);
+    match display {
+        Some(display) if matches!(start, WindowStart::Restore) => (saved.place(min, display.visible_bounds()), Some(display.id())),
+        _ => {
+            let visible = cx.primary_display().map_or(saved.bounds.size, |primary| primary.visible_bounds().size);
+            (Bounds::centered(None, saved.fitted_size(min, visible), cx), None)
+        }
+    }
+}
+
 fn open_window(start: WindowStart, cx: &mut App) {
-    let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
+    let min = root::min_window_size();
+    let (bounds, display_id) = opening_frame(&start, min, cx);
     let _ = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
-            window_min_size: Some(size(px(1016.), px(600.))),
+            display_id,
+            window_min_size: Some(min),
             titlebar: Some(TitlebarOptions {
                 title: Some("Fumi".into()),
                 appears_transparent: true,
