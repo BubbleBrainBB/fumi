@@ -2,7 +2,7 @@
 //! list: `FontPicker` in `SettingsView.swift`.
 
 use crate::anim::Fades;
-use crate::controls::{Probes, chevron, family_font, hairline, mix};
+use crate::controls::{Probes, chevron_down, family_font, hairline, mix};
 use crate::mac;
 use crate::scroller::{ScrollTarget, Scroller};
 use fumi_ui::text_field::{FieldEvent, TextField};
@@ -180,8 +180,9 @@ impl FontPicker {
                     }))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.selection = choose.clone();
-                        let on_select = this.on_select.clone();
-                        on_select(choose.clone(), window, cx);
+                        // After this update: the sheet comes back to set our selection.
+                        let (on_select, name) = (this.on_select.clone(), choose.clone());
+                        window.defer(cx, move |window, cx| on_select(name, window, cx));
                         this.close(window, cx);
                     }))
                     .child(
@@ -342,7 +343,7 @@ impl Render for FontPicker {
                     .child(self.selection.clone()),
             )
             .child(div().flex_1())
-            .child(chevron(90., c.text3))
+            .child(chevron_down(c.text3))
             .children(popover)
     }
 }

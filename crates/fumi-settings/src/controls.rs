@@ -85,8 +85,39 @@ impl Probes {
     }
 }
 
-/// `chevron.right` or, rotated 90 degrees, `chevron.down`, at 9 pt semibold.
-pub fn chevron(degrees: f32, color: Hsla) -> impl IntoElement {
+/// `chevron.down` at 9 pt semibold: a pop-up's mark.
+pub fn chevron_down(color: Hsla) -> impl IntoElement {
+    div()
+        .w(px(10.))
+        .h(px(10.))
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .child(fumi_ui::icons::symbol("chevron.down", 9., fumi_ui::native::weight::SEMIBOLD, color))
+}
+
+/// A disclosure mark turning from right (`p` 0) to down (`p` 1). The system's glyph
+/// at rest; images don't rotate, so a stroke of its shape while it turns.
+pub fn disclosure(p: f32, color: Hsla) -> AnyElement {
+    let rest = |name: &str| {
+        div()
+            .w(px(10.))
+            .h(px(10.))
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .child(fumi_ui::icons::symbol(name, 9., fumi_ui::native::weight::SEMIBOLD, color))
+            .into_any_element()
+    };
+    if p <= 0. {
+        return rest("chevron.right");
+    }
+    if p >= 1. {
+        return rest("chevron.down");
+    }
+    let degrees = 90. * p;
     canvas(
         |_, _, _| {},
         move |bounds: Bounds<Pixels>, _, window, _| {
@@ -106,6 +137,7 @@ pub fn chevron(degrees: f32, color: Hsla) -> impl IntoElement {
     .w(px(10.))
     .h(px(10.))
     .flex_none()
+    .into_any_element()
 }
 
 /// The sidebar's closed folder, `FolderGlyph` stroked at 1.15 in 16 x 16.

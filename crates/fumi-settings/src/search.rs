@@ -227,8 +227,12 @@ impl SearchPanel {
         } else {
             self.search_task = None;
             self.corpus_task = None;
-            if let Some(handle) = self.prev_focus.take() {
-                window.focus(&handle, cx);
+            // Back where it was, unless opening a note already moved it.
+            let handle = self.prev_focus.take();
+            if self.field.read(cx).focus.is_focused(window) {
+                if let Some(handle) = handle {
+                    window.focus(&handle, cx);
+                }
             }
         }
         cx.notify();
@@ -644,8 +648,8 @@ impl Render for SearchPanel {
             .flex_none()
             .flex()
             .flex_col()
-            .when(empty, |d| d.max_h(px(height)))
-            .when(!empty, |d| d.h(px(height)))
+            .when(empty, |d| d.max_h(px(height - 2.)))
+            .when(!empty, |d| d.h(px(height - 2.)))
             .child(header)
             .child(rule())
             .child(middle)

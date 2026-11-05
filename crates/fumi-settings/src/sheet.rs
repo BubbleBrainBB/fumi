@@ -5,7 +5,7 @@
 
 use crate::CloseSettings;
 use crate::anim::{Fades, Transition};
-use crate::controls::{Probes, chevron, family_font, hairline, mix, tabular_digits, text_width, tip, truncate_middle};
+use crate::controls::{Probes, chevron_down, disclosure, family_font, hairline, mix, tabular_digits, text_width, tip, truncate_middle};
 use crate::font_picker::FontPicker;
 use crate::mac;
 use crate::scroller::{ScrollTarget, Scroller};
@@ -400,8 +400,12 @@ impl SettingsSheet {
             self.prepare(window, cx);
         } else {
             self.picker.update(cx, |p, cx| p.close(window, cx));
-            if let Some(handle) = self.prev_focus.take() {
-                window.focus(&handle, cx);
+            // Back where it was, unless what closed the sheet already moved it.
+            let handle = self.prev_focus.take();
+            if self.focus.contains_focused(window, cx) {
+                if let Some(handle) = handle {
+                    window.focus(&handle, cx);
+                }
             }
         }
         cx.notify();
@@ -533,7 +537,7 @@ impl SettingsSheet {
             .when_some(icon, |d, image| d.child(img(image).w(px(18.)).h(px(13.)).flex_none()))
             .child(div().text_size(px(13.)).line_height(px(16.)).text_color(c.text).whitespace_nowrap().child(title))
             .child(div().flex_1())
-            .child(chevron(90., c.text3))
+            .child(chevron_down(c.text3))
     }
 
     /// A pop-up over plain strings, stored under `key`.
@@ -1080,7 +1084,7 @@ impl SettingsSheet {
                         this.folds.set("shortcuts", on, Instant::now());
                         cx.notify();
                     }))
-                    .child(chevron(90. * p, c.text3))
+                    .child(disclosure(p, c.text3))
                     .child(
                         div()
                             .text_size(px(13.))
@@ -1269,7 +1273,7 @@ impl Render for SettingsSheet {
             .flex_none()
             .flex()
             .flex_col()
-            .max_h(px(sheet_max_height(f32::from(window.viewport_size().height))))
+            .max_h(px(sheet_max_height(f32::from(window.viewport_size().height)) - 2.))
             .child(
                 div()
                     .flex_none()
