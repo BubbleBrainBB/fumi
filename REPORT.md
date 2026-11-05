@@ -74,7 +74,7 @@ GPUI 的其他数据（1MB）：
 - 它自带的编辑器是代码编辑器（行高统一：`top = line_height * row`），不能隐藏语法、也不能让标题有不同行高，所以用不上。
 - `gpui-pre-macos` 0.3.11 需要比 1.95 更新的 Rust。我在 `vendor/` 改了 3 行，避免下载 1.99。正式项目应该跟最新 stable。
 - 用 `runtime_shaders` 特性，省去了 Metal Toolchain 下载。
-- 依赖共 420 个包，没有 GPL/AGPL；有 2 个 MPL-2.0，已确认其一是 `cbindgen`，另一个未逐一确认；未用 Zed `editor` 的代码。
+- 依赖共 420 个包，没有 GPL/AGPL；有 2 个 MPL-2.0（`cbindgen`、`option-ext`），是文件级 copyleft，不影响 MIT 发布；未用 Zed `editor` 的代码。
 - `zorite-editor` 0.11.3（MIT）是现成的 GPUI 实时预览编辑器，共 1.6 万行，单独测过：
   - 每键耗时：10KB 1.9ms，200KB 194ms。
   - 1MB：打开 9.8 秒，90 秒内没跑完输入测试。
