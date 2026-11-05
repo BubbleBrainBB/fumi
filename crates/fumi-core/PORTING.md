@@ -11,3 +11,5 @@ Swift sources are in `~/bubble/notes-app/Fumi` and tests in `~/bubble/notes-app/
 - **Files.** Write only under a `tempfile` directory in tests. Never touch a real notes library.
 - **When it can't match.** If Swift behavior can't or shouldn't be reproduced (including a bug you find in the Swift code), keep the closest correct behavior, and list it in your final report with file and line. Don't silently change it.
 - **Dependencies.** Prefer what's in `Cargo.toml`. Add one only if it clearly earns its place, and name it in your report. Check its license is compatible with MIT (no GPL or AGPL).
+- **Dates.** Keep them as seconds since the Unix epoch. No date crate: put small calendar helpers in the module that needs them, and take "now" and the UTC offset as arguments so tests are deterministic.
+- **Cargo.** Run `cargo test -p fumi-core --offline`; three people are porting at once, so run only your module's tests while working (`cargo test -p fumi-core --offline <module>::`). crates.io is flaky from this machine through the proxy.

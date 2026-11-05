@@ -1488,10 +1488,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "fumi-core"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "ropey",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "fumi-gpui"
 version = "0.1.0"
 dependencies = [
  "cocoa 0.26.1",
+ "fumi-core",
  "gpui-pre",
  "gpui-pre-platform",
  "image",
