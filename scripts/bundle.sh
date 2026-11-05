@@ -1,15 +1,21 @@
 #!/bin/zsh
 # Wraps the release binary in a .app: macOS treats a bare binary as a background
 # tool in places that matter here (activation, screenshots, input). The bundle says
-# what the Swift app's project.yml says, except for its id, its executable and
-# where it's built: this isn't the shipping app yet.
+# what the Swift app's project.yml says. By default it's the test build, with its
+# own id (its own settings) and executable; scripts/release.sh sets the shipping
+# ones through BUNDLE_ID, BUNDLE_EXEC and BUNDLE_OUT.
 set -e
-R=${0:A:h:h}; A=$R/target/FumiGPUI.app
+R=${0:A:h:h}
+ID=${BUNDLE_ID:-com.fumi.gpui-prototype}
+EXEC=${BUNDLE_EXEC:-FumiGPUI}
+A=${BUNDLE_OUT:-$R/target/FumiGPUI.app}
 ASSETS=${FUMI_SWIFT:-$R/../notes-app}/Fumi/Resources/Assets.xcassets/AppIcon.appiconset
 VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' $R/Cargo.toml | head -1)
 
 mkdir -p $A/Contents/MacOS $A/Contents/Resources
-cp $R/target/release/fumi-gpui $A/Contents/MacOS/FumiGPUI
+rm -rf $A/Contents/MacOS
+mkdir -p $A/Contents/MacOS
+cp $R/target/release/fumi-gpui $A/Contents/MacOS/$EXEC
 
 # The icon: the asset catalog's sizes, renamed as iconutil expects, or scaled from
 # the largest with sips where one is missing.
@@ -35,8 +41,8 @@ cat > $A/Contents/Info.plist <<P
 <plist version="1.0"><dict>
 <key>CFBundleName</key><string>Fumi</string>
 <key>CFBundleDisplayName</key><string>Fumi</string>
-<key>CFBundleIdentifier</key><string>com.fumi.gpui-prototype</string>
-<key>CFBundleExecutable</key><string>FumiGPUI</string>
+<key>CFBundleIdentifier</key><string>$ID</string>
+<key>CFBundleExecutable</key><string>$EXEC</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundleShortVersionString</key><string>$VERSION</string>
@@ -50,5 +56,5 @@ cat > $A/Contents/Info.plist <<P
 <key>NSPhotoLibraryAddUsageDescription</key><string>Fumi adds the Xiaohongshu cards you export to Photos, so they reach your phone.</string>
 </dict></plist>
 P
-codesign --force -s - $A >/dev/null 2>&1
+[[ -n $BUNDLE_OUT ]] || codesign --force -s - $A >/dev/null 2>&1
 echo $A
