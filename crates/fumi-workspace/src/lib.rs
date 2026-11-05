@@ -69,8 +69,8 @@ pub struct Workspace {
     watcher: Option<Watcher>,
     /// Bumps when the store's notes change, for views that cache from them.
     pub revision: u64,
-    /// The library that should be open but can't be found: the welcome page says
-    /// so instead of showing itself as if the notes were gone.
+    /// Read-only copy of `store.missing_workspace`, which is the one to write. Kept
+    /// in step by `navigated`, `open_workspace` and `close_workspace`.
     pub missing_workspace: Option<PathBuf>,
 }
 
@@ -99,7 +99,8 @@ impl Workspace {
                     if path.exists() {
                         this.open_workspace(&path, cx);
                     } else {
-                        this.missing_workspace = Some(path);
+                        this.store.missing_workspace = Some(path);
+                        this.missing_workspace = this.store.missing_workspace.clone();
                     }
                 }
             }
@@ -191,7 +192,6 @@ impl Workspace {
     }
 
     pub fn open_workspace(&mut self, path: &Path, cx: &mut Context<Self>) {
-        self.missing_workspace = None;
         let key = path.to_string_lossy().into_owned();
         // Only the library opened on purpose becomes the remembered one, not a
         // dev override.
@@ -201,6 +201,7 @@ impl Workspace {
         }
         libraries::with(|list| list.add(&key));
         self.store.open_workspace(path, load_pins(&key));
+        self.missing_workspace = None;
         self.watcher = Watcher::new(path);
         self.model.restore_tabs(&key, load_saved_tabs(&key));
         self.reload(cx);
@@ -211,6 +212,7 @@ impl Workspace {
     pub fn close_workspace(&mut self, cx: &mut Context<Self>) {
         self.watcher = None;
         self.store.close_workspace();
+        self.missing_workspace = self.store.missing_workspace.clone();
         cx.emit(WorkspaceEvent::WorkspaceChanged);
         cx.notify();
     }
@@ -238,6 +240,7 @@ impl Workspace {
 
     /// Redraw and remember tabs after navigating.
     pub fn navigated(&mut self, cx: &mut Context<Self>) {
+        self.missing_workspace = self.store.missing_workspace.clone();
         self.save_tabs();
         cx.notify();
     }
