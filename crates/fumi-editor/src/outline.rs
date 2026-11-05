@@ -244,6 +244,7 @@ pub struct RailState {
     close_token: u64,
     swell: Vec<(f32, f32)>,
     last_step: Option<Instant>,
+    was_moving: bool,
     pub fade: Eased,
     pub card_top: Eased,
     pub card_height: Eased,
@@ -266,6 +267,7 @@ impl Default for RailState {
             close_token: 0,
             swell: Vec::new(),
             last_step: None,
+            was_moving: false,
             fade: Eased::at(0.),
             card_top: Eased::at(0.),
             card_height: Eased::at(0.),
@@ -345,7 +347,11 @@ impl RailState {
     /// Moves every tick toward its proximity. True while any is still moving.
     fn step_ticks(&mut self, count: usize, now: Instant) -> bool {
         self.swell.resize(count, (0., 0.));
-        let dt = self.last_step.map_or(0., |at| now.saturating_duration_since(at).as_secs_f32());
+        // After a rest, one frame's worth: the time since says nothing about it.
+        let dt = match self.last_step {
+            Some(at) if self.was_moving => now.saturating_duration_since(at).as_secs_f32(),
+            _ => 1. / 120.,
+        };
         self.last_step = Some(now);
         let mut moving = false;
         for (i, (value, velocity)) in self.swell.iter_mut().enumerate() {
@@ -365,6 +371,7 @@ impl RailState {
                 moving = true;
             }
         }
+        self.was_moving = moving;
         moving
     }
 

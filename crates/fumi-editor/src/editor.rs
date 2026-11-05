@@ -205,6 +205,8 @@ pub struct Editor {
     pub column_setting: String,
     pending_link: Option<PendingLink>,
     was_focused: bool,
+    /// Only the key window's focused editor draws a caret.
+    caret_shows: bool,
     hovered_web: Option<String>,
     edit_epoch: u64,
     scrolled_at: Option<Instant>,
@@ -347,6 +349,7 @@ impl Editor {
             column_setting: fumi_ui::settings::editor_width(),
             pending_link: None,
             was_focused: false,
+            caret_shows: false,
             hovered_web: None,
             edit_epoch: 0,
             scrolled_at: None,
@@ -1835,6 +1838,7 @@ impl Editor {
             let start = self.doc.line_start(line);
             let caret_at = self.reveal_offset(line);
             let mut built = self.display_of(line, caret_at);
+            let own_bottom = built.bottom;
             // The room at the page's two ends.
             if ix == 0 {
                 built.top += px(TOP_PAD);
@@ -1847,7 +1851,7 @@ impl Editor {
             let src_len = display.src_len;
             let head_here = line == self.head_line;
             let display_head = if head_here { display.src_to_disp(self.head - start) } else { 0 };
-            let caret = (self.selection_is_empty() && self.caret_on && head_here).then_some(display_head);
+            let caret = (self.selection_is_empty() && self.caret_on && self.caret_shows && head_here).then_some(display_head);
             let autoscroll = head_here && self.autoscroll_line == Some(line) && self.autoscroll_line.take().is_some();
             let keep_at = self
                 .keep_now
@@ -1858,7 +1862,7 @@ impl Editor {
                     .then(|| (display.src_to_disp(menu.anchor - start), self.slash_box.clone()))
             });
             let placeholder = (line == 0 && self.draft_placeholder && self.is_untouched_draft())
-                .then(|| (self.typo.body(), px(self.typo.size)));
+                .then(|| (self.typo.body(), px(self.typo.size), own_bottom));
             let sel = self.selection();
             let selection = (!sel.is_empty()
                 && sel.start <= start + src_len
@@ -2027,6 +2031,7 @@ impl Render for Editor {
             .on_drop(cx.listener(Self::drop_files));
         let root = self.register_actions(root, cx);
         self.was_focused = self.focus.is_focused(window);
+        self.caret_shows = self.was_focused && window.is_window_active();
         self.note_scroll(window, cx);
 
         let entity = cx.entity();

@@ -245,8 +245,9 @@ pub struct LineEl {
     /// The open slash menu's slash, if it's on this line: visible offset, and
     /// where to report its row's box.
     pub slash: Option<(usize, Rc<Cell<Option<Bounds<Pixels>>>>)>,
-    /// An untouched draft: the body font, for the hint under the title.
-    pub placeholder: Option<(Font, Pixels)>,
+    /// An untouched draft: the body font and size, for the hint under the title,
+    /// and the spacing the title line has after it.
+    pub placeholder: Option<(Font, Pixels, Pixels)>,
 }
 
 impl IntoElement for LineEl {
@@ -710,7 +711,7 @@ impl Element for LineEl {
 
         // A draft's faint title, right past the `# `, and the hint under it. As
         // the Swift draws them: over the line's whole rectangle, spacing included.
-        if let Some((body_font, body_size)) = &self.placeholder {
+        if let Some((body_font, body_size, after)) = &self.placeholder {
             let run = |len: usize, font: Font| TextRun {
                 len,
                 font,
@@ -719,7 +720,7 @@ impl Element for LineEl {
                 underline: None,
                 strikethrough: None,
             };
-            let line_height = laid.rows[0].height + d.bottom;
+            let line_height = laid.rows[0].height + *after;
             let title = window.text_system().shape_line(
                 DRAFT_TITLE.into(),
                 d.font_size,

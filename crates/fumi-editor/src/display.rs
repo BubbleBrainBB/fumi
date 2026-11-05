@@ -2185,6 +2185,23 @@ mod tests {
     }
 
     #[core::prelude::v1::test]
+    fn the_caret_goes_by_the_font_before_it_but_never_small() {
+        use crate::element::caret_font;
+        let body = px(16.);
+        let mut d = line("ab `c` d", Kind::Para, false);
+        // At the start: the line's own.
+        assert_eq!(caret_font(&d, 0, body).1, d.font_size);
+        // Right after the code: its smaller size, which isn't under 80%.
+        let code_end = d.text.find('c').unwrap() + 1;
+        assert_eq!(caret_font(&d, code_end, body).1, px(Typography::default().small));
+        // Under 80%: the body size.
+        for span in &mut d.spans {
+            span.size = px(0.1);
+        }
+        assert_eq!(caret_font(&d, 1, body).1, body);
+    }
+
+    #[core::prelude::v1::test]
     fn inline_math_is_one_atom() {
         let d = line("a $x^2$ b", Kind::Para, false);
         assert_eq!(d.text.as_ref(), "a \u{FFFC} b");
