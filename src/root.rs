@@ -4,6 +4,7 @@
 
 use crate::pages::PageHost;
 use fumi_publish::PublishPane;
+use fumi_editor::element::CaretSlot;
 use fumi_settings::search::SearchPanel;
 use fumi_settings::sheet::{OnChange, SettingsChange, SettingsSheet};
 use fumi_settings::welcome::{OnOpen, WelcomePage};
@@ -18,6 +19,30 @@ use gpui::prelude::*;
 use gpui::*;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
+
+/// The editor's caret, drawn on its own layer over the window: a blink redraws
+/// this and nothing under it, which keeps an idle note close to free.
+pub struct CaretLayer {
+    slot: Rc<CaretSlot>,
+}
+
+impl Render for CaretLayer {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let slot = self.slot.clone();
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                if slot.on.get()
+                    && let Some(rect) = slot.rect.get()
+                {
+                    window.paint_quad(fill(rect, slot.color.get()));
+                }
+            },
+        )
+        .absolute()
+        .size_full()
+    }
+}
 
 pub const PAGE_INSET: f32 = 8.;
 pub const PAGE_RADIUS: f32 = 12.;
@@ -45,6 +70,7 @@ pub struct RootView {
     sheet: Entity<SettingsSheet>,
     welcome: Entity<WelcomePage>,
     publish: Entity<PublishPane>,
+    caret: Entity<CaretLayer>,
     backdrop: Option<usize>,
     focus: FocusHandle,
     /// 0 is the plain sheet, 1 the framed page.
@@ -59,6 +85,14 @@ impl RootView {
     pub fn new(start: WindowStart, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let workspace = cx.new(|cx| Workspace::starting(start, cx));
         let pages = cx.new(|cx| PageHost::new(workspace.clone(), window, cx));
+        let slot = Rc::new(CaretSlot::default());
+        slot.on.set(true);
+        let caret = cx.new(|_| CaretLayer { slot: slot.clone() });
+        let blink_layer = caret.downgrade();
+        let redraw: Rc<dyn Fn(&mut App)> = Rc::new(move |cx: &mut App| {
+            let _ = blink_layer.update(cx, |_, cx| cx.notify());
+        });
+        pages.update(cx, |p, _| p.caret = Some((slot, redraw)));
         let sidebar = cx.new(|cx| SidebarView::new(workspace.clone(), window, cx));
         let toolbar = cx.new(|cx| Toolbar::new(workspace.clone(), window, cx));
         let live_pages = pages.clone();
@@ -130,6 +164,7 @@ impl RootView {
             sheet,
             welcome,
             publish,
+            caret,
             backdrop: None,
             focus,
             frame: 1.,
@@ -319,6 +354,13 @@ impl Render for RootView {
             return root;
         }
 
+        // Views that redraw only when their own state changes: a blink of the
+        // caret layer, above them, then repaints none of them.
+        let sidebar_width = self.sidebar.read(cx).current_width();
+        let sidebar = self
+            .sidebar
+            .clone()
+            .cached(StyleRefinement::default().flex_none().h_full().w(px(sidebar_width)));
         let inset = px(PAGE_INSET * f);
         let detail = div()
             .flex_1()
@@ -332,17 +374,18 @@ impl Render for RootView {
                     .px(inset)
                     .pb(inset)
                     .child(fumi_publish::beside_page(
-                        self.page_sheet().size_full().child(self.pages.clone()),
+                        self.page_sheet().size_full().child(self.pages.clone().cached(StyleRefinement::default().size_full())),
                         &self.publish,
                         PAGE_RADIUS,
                         cx,
                     )),
             )
             // Painted after the page: the active tab's flare meets its top edge.
-            .child(div().absolute().top_0().left_0().right_0().h(px(TOOLBAR_HEIGHT)).child(self.toolbar.clone()));
+            .child(div().absolute().top_0().left_0().right_0().h(px(TOOLBAR_HEIGHT)).child(self.toolbar.clone().cached(StyleRefinement::default().size_full())));
         root.child(
             layer(shell)
-                .child(div().size_full().flex().child(self.sidebar.clone()).child(detail))
+                .child(div().size_full().flex().child(sidebar).child(detail))
+            .child(self.caret.clone())
                 .child(self.search.clone())
                 .child(self.sheet.clone()),
         )

@@ -67,6 +67,8 @@ pub struct Workspace {
     pub model: AppModel,
     pub links: Rc<WikiLinkIndex>,
     watcher: Option<Watcher>,
+    /// Woken by the watcher after each batch of file events.
+    wake: futures::channel::mpsc::UnboundedSender<()>,
     /// Bumps when the store's notes change, for views that cache from them.
     pub revision: u64,
     /// Read-only copy of `store.missing_workspace`, which is the one to write. Kept
@@ -82,11 +84,13 @@ impl Workspace {
     pub fn starting(start: WindowStart, cx: &mut Context<Self>) -> Self {
         let mut model = AppModel::new(new_tab_id);
         model.sort_mode = SortMode::from_raw(&settings::get_string(settings::keys::SORT_MODE).unwrap_or_default());
+        let (wake, mut wake_rx) = futures::channel::mpsc::unbounded();
         let mut this = Workspace {
             store: NoteStore::new(),
             model,
             links: Rc::new(WikiLinkIndex::new()),
             watcher: None,
+            wake,
             revision: 0,
             missing_workspace: None,
         };
@@ -109,9 +113,24 @@ impl Workspace {
         }
         // Reloads are debounced by the store; this drains the watcher and runs
         // what's due.
+        // Sleeps until the watcher reports or a debounced reload falls due: an
+        // idle window doesn't wake for nothing.
         cx.spawn(async move |this: WeakEntity<Workspace>, cx| {
+            use futures::{FutureExt, StreamExt};
             loop {
-                cx.background_executor().timer(Duration::from_millis(150)).await;
+                let Ok(due) = this.update(cx, |w, _| w.store.reload_deadline()) else { break };
+                let wait = match due {
+                    Some(at) => Duration::from_secs_f64((at - now().secs).clamp(0., 1.)),
+                    // A reload scheduled in the app (a new note, a move) is
+                    // seen within a second.
+                    None => Duration::from_secs(1),
+                };
+                let timer = cx.background_executor().timer(wait).fuse();
+                futures::pin_mut!(timer);
+                futures::select! {
+                    woke = wake_rx.next() => if woke.is_none() { break },
+                    _ = timer => {}
+                }
                 if this.update(cx, |w, cx| w.poll_files(cx)).is_err() {
                     break;
                 }
@@ -206,7 +225,7 @@ impl Workspace {
         libraries::with(|list| list.add(&key));
         self.store.open_workspace(path, load_pins(&key));
         self.missing_workspace = None;
-        self.watcher = Watcher::new(path);
+        self.watcher = Watcher::with_wake(path, Some(self.wake.clone()));
         self.model.restore_tabs(&key, load_saved_tabs(&key));
         self.reload(cx);
         cx.emit(WorkspaceEvent::WorkspaceChanged);

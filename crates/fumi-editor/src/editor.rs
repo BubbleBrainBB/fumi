@@ -214,6 +214,10 @@ pub struct Editor {
     was_focused: bool,
     /// Only the key window's focused editor draws a caret.
     caret_shows: bool,
+    /// Set by a host that draws the caret on its own layer; see `CaretSlot`.
+    pub caret_slot: Option<Rc<CaretSlot>>,
+    /// Redraws the host's caret layer on a blink.
+    pub on_blink: Option<Rc<dyn Fn(&mut App)>>,
     hovered_web: Option<String>,
     edit_epoch: u64,
     scrolled_at: Option<Instant>,
@@ -360,6 +364,8 @@ impl Editor {
             pending_link: None,
             was_focused: false,
             caret_shows: false,
+            caret_slot: None,
+            on_blink: None,
             hovered_web: None,
             edit_epoch: 0,
             scrolled_at: None,
@@ -393,9 +399,25 @@ impl Editor {
                 loop {
                     cx.background_executor().timer(Duration::from_millis(530)).await;
                     let alive = this.update(cx, |e, cx| {
-                        if e.selection_is_empty() && e.blink_epoch == 0 {
-                            e.caret_on = !e.caret_on;
-                            cx.notify();
+                        // Only a caret that shows blinks; an editor without focus
+                        // stays still and costs nothing.
+                        if e.selection_is_empty() && e.blink_epoch == 0 && e.caret_shows {
+                            match (&e.caret_slot, &e.on_blink) {
+                                (Some(slot), Some(redraw)) => {
+                                    slot.on.set(!slot.on.get());
+                                    let redraw = redraw.clone();
+                                    redraw(cx);
+                                }
+                                _ => {
+                                    e.caret_on = !e.caret_on;
+                                    cx.notify();
+                                }
+                            }
+                        } else if !e.caret_shows {
+                            e.caret_on = true;
+                            if let Some(slot) = &e.caret_slot {
+                                slot.on.set(true);
+                            }
                         }
                         e.blink_epoch = 0;
                     });
@@ -631,6 +653,9 @@ impl Editor {
         metrics::note_change();
         self.caret_on = true;
         self.blink_epoch = 1;
+        if let Some(slot) = &self.caret_slot {
+            slot.on.set(true);
+        }
         let keep_wanted = std::mem::take(&mut self.keep_wanted);
         if !self.slash_hold {
             self.refresh_slash();
@@ -1866,7 +1891,8 @@ impl Editor {
             let src_len = display.src_len;
             let head_here = line == self.head_line;
             let display_head = if head_here { display.src_to_disp(self.head - start) } else { 0 };
-            let caret = (self.selection_is_empty() && self.caret_on && self.caret_shows && head_here).then_some(display_head);
+            let blinking_here = self.caret_on || self.caret_slot.is_some();
+            let caret = (self.selection_is_empty() && blinking_here && self.caret_shows && head_here).then_some(display_head);
             let autoscroll = head_here && self.autoscroll_line == Some(line) && self.autoscroll_line.take().is_some();
             let keep_at = self
                 .keep_now
@@ -1903,6 +1929,7 @@ impl Editor {
                 display,
                 caret,
                 caret_head: head_here.then_some(display_head),
+                caret_slot: self.caret_slot.clone(),
                 autoscroll,
                 selection,
                 hovered,
@@ -1981,6 +2008,9 @@ impl Focusable for Editor {
 
 impl Render for Editor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(slot) = &self.caret_slot {
+            slot.rect.set(None);
+        }
         self.viewport_cache = self.list.viewport_bounds();
         metrics::frame_begin();
         if std::mem::take(&mut self.media_dirty) {

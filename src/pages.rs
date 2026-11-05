@@ -12,8 +12,10 @@ use fumi_core::wiki_link::WikiLink;
 use fumi_editor::display::{LinkContext, Typography};
 use fumi_editor::editor::{Editor, EditorEvent, ViewState};
 use fumi_ui::theme::t;
+use fumi_editor::element::CaretSlot;
 use gpui::*;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::path::Path;
 use std::time::Duration;
 
@@ -44,6 +46,8 @@ pub struct PageHost {
     /// filters, as in Swift.
     memos: Option<Entity<MemosView>>,
     typo: Typography,
+    /// The window's caret layer, which every editor here draws its caret on.
+    pub caret: Option<(Rc<CaretSlot>, Rc<dyn Fn(&mut App)>)>,
     /// Where each note was left, for opening it again within this launch: what
     /// was selected, how far it was scrolled, whether it had the keyboard.
     places: HashMap<String, (ViewState, bool)>,
@@ -80,6 +84,7 @@ impl PageHost {
             empty,
             memos: None,
             typo: Typography::from_settings(),
+            caret: None,
             places: HashMap::new(),
             shown: None,
             _subs: subs,
@@ -153,7 +158,7 @@ impl PageHost {
         });
         let place = if is_draft { None } else { self.places.get(&note_id).copied() };
         let editor = cx.new(move |cx| {
-            let mut e = Editor::new(bytes, Some(path), true, cx);
+            let mut e = Editor::new(bytes, Some(path), std::env::var("FUMI_NO_BLINK").is_err(), cx);
             e.typo = typo;
             e.links = links;
             e.library = library;
@@ -404,6 +409,11 @@ impl PageHost {
 impl Render for PageHost {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = t();
+        // A page without an editor leaves no caret behind; an editor's own render
+        // puts its caret back.
+        if let Some((slot, _)) = &self.caret {
+            slot.rect.set(None);
+        }
         let (tab, content) = {
             let w = self.workspace.read(cx);
             let active = w.model.active_tab();

@@ -227,12 +227,22 @@ pub fn shifting_rect(view: Bounds<Pixels>, shift: Pixels) -> Bounds<Pixels> {
     Bounds::new(point(view.left(), y), size(px(1.), px(1.)))
 }
 
+/// Where the caret is drawn, when something outside the editor draws it: the
+/// window's caret layer. Blinking then redraws only that layer, not the note.
+#[derive(Default)]
+pub struct CaretSlot {
+    pub rect: std::cell::Cell<Option<Bounds<Pixels>>>,
+    pub on: std::cell::Cell<bool>,
+    pub color: std::cell::Cell<Hsla>,
+}
+
 pub struct LineEl {
     pub line: usize,
     pub display: Rc<DisplayLine>,
     pub caret: Option<usize>,
     /// Where the caret is on this line, drawn or not (it blinks).
     pub caret_head: Option<usize>,
+    pub caret_slot: Option<Rc<CaretSlot>>,
     pub autoscroll: bool,
     /// Visible bytes selected, and whether the selection runs on past the line.
     pub selection: Option<(Range<usize>, bool)>,
@@ -773,10 +783,14 @@ impl Element for LineEl {
             let asc = ts.ascent(font_id, font_size);
             let desc = ts.descent(font_id, font_size).abs();
             let (y, h) = caret_box(f32::from(base), f32::from(asc), f32::from(desc), f32::from(top_y + r.y), f32::from(r.height));
-            window.paint_quad(fill(
-                Bounds::new(point(text_x + x - px(0.5), px(y)), size(px(1.5), px(h))),
-                c.accent,
-            ));
+            let caret_rect = Bounds::new(point(text_x + x - px(0.5), px(y)), size(px(1.5), px(h)));
+            match &self.caret_slot {
+                Some(slot) => {
+                    slot.rect.set(Some(caret_rect));
+                    slot.color.set(c.accent);
+                }
+                None => window.paint_quad(fill(caret_rect, c.accent)),
+            }
         }
 
         self.painted.borrow_mut().push(Painted {

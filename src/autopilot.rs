@@ -228,6 +228,26 @@ async fn run(p: &mut Pilot, root: &WeakEntity<RootView>, scenario: &str, lib: &s
         }
         "idle" => {
             open(p, root, lib, doc, cx).await;
+            // Focused, the caret blinking: a writer pausing mid-sentence.
+            if std::env::var("BENCH_ACTIVATE").is_ok() {
+                let _ = cx.update(|window, cx| {
+                    cx.activate(true);
+                    window.activate_window();
+                });
+                sleep(cx, 500).await;
+            }
+            if let Some(e) = editor(root, cx)
+                && let Some(at) = e.read_with(cx, |e, _| spot(e, 0.5, true))
+            {
+                let _ = cx.update(|window, cx| {
+                    window.focus(&e.read(cx).focus.clone(), cx);
+                    e.update(cx, |e, _| {
+                        e.anchor = at;
+                        e.head = at;
+                        e.set_caret_for_driver();
+                    });
+                });
+            }
             sleep(cx, 5000).await;
             p.drain();
             p.slices.clear();

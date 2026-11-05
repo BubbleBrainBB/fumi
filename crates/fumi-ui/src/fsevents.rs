@@ -50,6 +50,11 @@ unsafe extern "C" {
     static kCFTypeArrayCallBacks: c_void;
 }
 
+struct Sink {
+    events: Sender<Vec<String>>,
+    wake: Option<futures::channel::mpsc::UnboundedSender<()>>,
+}
+
 extern "C" fn on_events(
     _: CFRef,
     info: *mut c_void,
@@ -58,12 +63,15 @@ extern "C" fn on_events(
     _: *const u32,
     _: *const u64,
 ) {
-    let sender = unsafe { &*(info as *const Sender<Vec<String>>) };
+    let sink = unsafe { &*(info as *const Sink) };
     let paths = paths as *const *const c_char;
     let list = (0..count)
         .map(|i| unsafe { CStr::from_ptr(*paths.add(i)) }.to_string_lossy().into_owned())
         .collect();
-    let _ = sender.send(list);
+    let _ = sink.events.send(list);
+    if let Some(wake) = &sink.wake {
+        let _ = wake.unbounded_send(());
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -77,13 +85,19 @@ pub struct Watcher {
 
 impl Watcher {
     pub fn new(path: &Path) -> Option<Watcher> {
+        Self::with_wake(path, None)
+    }
+
+    /// Also sends `()` on `wake` after each batch, so a task can sleep until then
+    /// instead of polling.
+    pub fn with_wake(path: &Path, wake: Option<futures::channel::mpsc::UnboundedSender<()>>) -> Option<Watcher> {
         let c_path = CString::new(path.to_string_lossy().as_bytes()).ok()?;
         let (tx, rx) = channel();
         let (loop_tx, loop_rx) = channel();
         std::thread::Builder::new()
             .name("fsevents".into())
             .spawn(move || unsafe {
-                let sender = Box::into_raw(Box::new(tx));
+                let sender = Box::into_raw(Box::new(Sink { events: tx, wake }));
                 let context = StreamContext {
                     version: 0,
                     info: sender as *mut c_void,
