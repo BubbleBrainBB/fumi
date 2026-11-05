@@ -1,6 +1,7 @@
 //! Fumi. `FUMI_DRIVE=scenario fumi-gpui note.md` runs a benchmark on the bare
 //! editor; otherwise this is the app.
 
+mod autopilot;
 mod pages;
 mod root;
 
@@ -15,8 +16,11 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Instant;
 
+/// When the process began, for the benchmark's launch times.
+static LAUNCHED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
 fn main() {
-    let t0 = Instant::now();
+    let t0 = *LAUNCHED.get_or_init(Instant::now);
     metrics::now();
     match std::env::var("FUMI_DRIVE").ok() {
         Some(scenario) => run_bare_editor(Some(scenario), t0),
@@ -57,7 +61,13 @@ fn open_window(start: WindowStart, cx: &mut App) {
             }),
             ..Default::default()
         },
-        |window, cx| cx.new(|cx| RootView::new(start, window, cx)),
+        |window, cx| {
+            let root = cx.new(|cx| RootView::new(start, window, cx));
+            if std::env::var("BENCH_SCENARIO").is_ok() {
+                autopilot::start(root.downgrade(), *LAUNCHED.get_or_init(Instant::now), window, cx);
+            }
+            root
+        },
     );
     cx.activate(true);
 }
