@@ -169,7 +169,7 @@ fn table_model(src: &str, available: f32, typo: &Typography, window: &Window) ->
     for row in &rows {
         for (c, cell) in row.iter().enumerate() {
             let laid = shape_cell(cell, px(1e6), window);
-            natural[c] = natural[c].max(f32::from(laid.width()).ceil());
+            natural[c] = natural[c].max(f32::from(laid.width()).ceil() + 1.);
             minimum[c] = minimum[c].max(longest_word(cell.text.as_ref(), &laid));
         }
     }

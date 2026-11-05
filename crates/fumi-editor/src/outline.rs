@@ -635,8 +635,11 @@ impl Editor {
         Some(
             div()
                 .id("outline-column")
-                .relative()
-                .flex_none()
+                // Over the page, as Swift's ZStack has it: the text column
+                // doesn't move when a note gains its first heading.
+                .absolute()
+                .top_0()
+                .right_0()
                 .w(px(RAIL_WIDTH + EDGE_INSET))
                 .h_full()
                 .occlude()
