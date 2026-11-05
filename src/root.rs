@@ -2,7 +2,7 @@
 //! A port of `AppShellView`.
 
 use crate::pages::{PageHost, ToolbarContent};
-use crate::workspace::{Workspace, WorkspaceEvent};
+use fumi_workspace::{Workspace, WorkspaceEvent};
 use fumi_core::tabs::Content;
 use fumi_ui::native;
 use fumi_ui::theme::{self, t};

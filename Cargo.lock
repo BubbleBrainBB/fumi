@@ -1488,6 +1488,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fumi-chrome"
+version = "0.1.0"
+dependencies = [
+ "fumi-core",
+ "fumi-ui",
+ "fumi-workspace",
+ "gpui-pre",
+ "gpui-pre-platform",
+ "smallvec",
+]
+
+[[package]]
 name = "fumi-core"
 version = "0.1.0"
 dependencies = [
@@ -1524,14 +1536,54 @@ name = "fumi-gpui"
 version = "0.1.0"
 dependencies = [
  "cocoa 0.26.1",
+ "fumi-chrome",
  "fumi-core",
  "fumi-editor",
+ "fumi-memos",
+ "fumi-settings",
+ "fumi-sidebar",
  "fumi-ui",
+ "fumi-workspace",
  "gpui-pre",
  "gpui-pre-platform",
  "libc",
  "objc",
- "zorite-editor",
+]
+
+[[package]]
+name = "fumi-memos"
+version = "0.1.0"
+dependencies = [
+ "fumi-core",
+ "fumi-ui",
+ "fumi-workspace",
+ "gpui-pre",
+ "gpui-pre-platform",
+ "smallvec",
+]
+
+[[package]]
+name = "fumi-settings"
+version = "0.1.0"
+dependencies = [
+ "fumi-core",
+ "fumi-ui",
+ "fumi-workspace",
+ "gpui-pre",
+ "gpui-pre-platform",
+ "smallvec",
+]
+
+[[package]]
+name = "fumi-sidebar"
+version = "0.1.0"
+dependencies = [
+ "fumi-core",
+ "fumi-ui",
+ "fumi-workspace",
+ "gpui-pre",
+ "gpui-pre-platform",
+ "smallvec",
 ]
 
 [[package]]
@@ -1545,6 +1597,17 @@ dependencies = [
  "objc",
  "raw-window-handle",
  "smallvec",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "fumi-workspace"
+version = "0.1.0"
+dependencies = [
+ "fumi-core",
+ "fumi-ui",
+ "gpui-pre",
+ "libc",
 ]
 
 [[package]]
@@ -1754,16 +1817,6 @@ dependencies = [
  "presser",
  "thiserror 2.0.21",
  "windows 0.62.2",
-]
-
-[[package]]
-name = "gpui-bidi"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12ca465817de1670c6c1a830c0f4a0a665434e4d02c30a7ffc6362e0194f9cc9"
-dependencies = [
- "gpui-pre",
- "unicode-bidi",
 ]
 
 [[package]]
@@ -6680,24 +6733,6 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
-
-[[package]]
-name = "zorite-editor"
-version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41d1118acb30b01f26d8839b08a90904eb071248392072e92bbc674c30d17d7e"
-dependencies = [
- "gpui-bidi",
- "gpui-pre",
- "unicode-segmentation",
- "zorite-markdown",
-]
-
-[[package]]
-name = "zorite-markdown"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59383128cff3700ff49464f1974e3c6969b5d5efe4cc2ee37bb41dcdb5feac44"
 
 [[package]]
 name = "zune-core"

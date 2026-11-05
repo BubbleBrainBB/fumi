@@ -2,7 +2,7 @@
 //! back to shows exactly what it showed, or the Memos and file pages. Saving and
 //! taking in outside changes happen here. A port of `EditorView`'s host logic.
 
-use crate::workspace::{Workspace, WorkspaceEvent, now};
+use fumi_workspace::{Workspace, WorkspaceEvent, now};
 use fumi_core::note_store::{ReadError, read_note_file};
 use fumi_core::tabs::Content;
 use fumi_core::wiki_link::WikiLink;

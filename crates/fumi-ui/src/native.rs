@@ -389,3 +389,133 @@ pub fn trash(path: &std::path::Path) -> bool {
         msg_send![manager, trashItemAtURL: url resultingItemURL: out error: err]
     }
 }
+
+// Context menus ---------------------------------------------------------------
+
+/// One row of a native menu.
+#[derive(Clone, Debug)]
+pub enum MenuRow {
+    Item { title: String, enabled: bool, destructive: bool, key: Option<String> },
+    Separator,
+    Submenu { title: String, rows: Vec<MenuRow> },
+    /// A row that can't be clicked, as a section label.
+    Label(String),
+}
+
+impl MenuRow {
+    pub fn item(title: impl Into<String>) -> Self {
+        MenuRow::Item { title: title.into(), enabled: true, destructive: false, key: None }
+    }
+
+    pub fn disabled(title: impl Into<String>) -> Self {
+        MenuRow::Item { title: title.into(), enabled: false, destructive: false, key: None }
+    }
+
+    pub fn destructive(title: impl Into<String>) -> Self {
+        MenuRow::Item { title: title.into(), enabled: true, destructive: true, key: None }
+    }
+}
+
+use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
+static CHOSEN: AtomicI64 = AtomicI64::new(-1);
+
+extern "C" fn menu_action(_: &objc::runtime::Object, _: objc::runtime::Sel, sender: id) {
+    let tag: i64 = unsafe { msg_send![sender, tag] };
+    CHOSEN.store(tag, AtomicOrdering::SeqCst);
+}
+
+fn menu_target() -> id {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let superclass = class!(NSObject);
+        let mut decl = objc::declare::ClassDecl::new("FumiMenuTarget", superclass).expect("class is new");
+        unsafe {
+            decl.add_method(
+                sel!(fumiMenuAction:),
+                menu_action as extern "C" fn(&objc::runtime::Object, objc::runtime::Sel, id),
+            );
+        }
+        decl.register();
+    });
+    unsafe {
+        let class = Class::get("FumiMenuTarget").expect("registered");
+        let t: id = msg_send![class, new];
+        t
+    }
+}
+
+fn build_menu(rows: &[MenuRow], target: id, next_tag: &mut i64) -> id {
+    unsafe {
+        let menu: id = msg_send![class!(NSMenu), new];
+        let _: () = msg_send![menu, setAutoenablesItems: false];
+        for row in rows {
+            match row {
+                MenuRow::Separator => {
+                    let sep: id = msg_send![class!(NSMenuItem), separatorItem];
+                    let _: () = msg_send![menu, addItem: sep];
+                }
+                MenuRow::Label(title) => {
+                    let item: id = msg_send![class!(NSMenuItem), alloc];
+                    let item: id = msg_send![item, initWithTitle: ns(title) action: sel!(fumiNoop:) keyEquivalent: ns("")];
+                    let _: () = msg_send![item, setEnabled: false];
+                    let _: () = msg_send![menu, addItem: item];
+                }
+                MenuRow::Item { title, enabled, destructive, key } => {
+                    let item: id = msg_send![class!(NSMenuItem), alloc];
+                    let item: id = msg_send![item,
+                        initWithTitle: ns(title)
+                        action: sel!(fumiMenuAction:)
+                        keyEquivalent: ns(key.as_deref().unwrap_or(""))];
+                    let _: () = msg_send![item, setTarget: target];
+                    let _: () = msg_send![item, setTag: *next_tag];
+                    *next_tag += 1;
+                    let _: () = msg_send![item, setEnabled: *enabled];
+                    if *destructive {
+                        // Red text, as SwiftUI's destructive role draws it.
+                        let red: id = msg_send![class!(NSColor), systemRedColor];
+                        let attrs: id = msg_send![class!(NSDictionary), dictionaryWithObject: red forKey: ns("NSColor")];
+                        let string: id = msg_send![class!(NSAttributedString), alloc];
+                        let string: id = msg_send![string, initWithString: ns(title) attributes: attrs];
+                        let _: () = msg_send![item, setAttributedTitle: string];
+                    }
+                    let _: () = msg_send![menu, addItem: item];
+                }
+                MenuRow::Submenu { title, rows } => {
+                    let item: id = msg_send![class!(NSMenuItem), alloc];
+                    let item: id = msg_send![item, initWithTitle: ns(title) action: nil keyEquivalent: ns("")];
+                    let sub = build_menu(rows, target, next_tag);
+                    let _: () = msg_send![item, setSubmenu: sub];
+                    let _: () = msg_send![menu, addItem: item];
+                }
+            }
+        }
+        menu
+    }
+}
+
+/// Shows a native menu at `position` (window coordinates, top-left origin) and
+/// waits for it to close. Returns the index of the chosen item, counting only
+/// `Item` rows in reading order, submenus included.
+pub fn popup_menu(window: &Window, rows: &[MenuRow], position: Point<Pixels>) -> Option<usize> {
+    unsafe {
+        let ns_win = ns_window_of(window);
+        if ns_win == nil {
+            return None;
+        }
+        let view: id = msg_send![ns_win, contentView];
+        let frame: NSRect = msg_send![view, frame];
+        let x = f32::from(position.x) as f64;
+        let y = frame.size.height - f32::from(position.y) as f64;
+        let target = menu_target();
+        let mut next = 0;
+        let menu = build_menu(rows, target, &mut next);
+        CHOSEN.store(-1, AtomicOrdering::SeqCst);
+        let flipped: bool = msg_send![view, isFlipped];
+        let at = NSPoint::new(x, if flipped { f32::from(position.y) as f64 } else { y });
+        let _: bool = msg_send![menu, popUpMenuPositioningItem: nil atLocation: at inView: view];
+        let _: () = msg_send![menu, release];
+        let _: () = msg_send![target, release];
+        let chosen = CHOSEN.load(AtomicOrdering::SeqCst);
+        (chosen >= 0).then_some(chosen as usize)
+    }
+}

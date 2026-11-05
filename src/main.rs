@@ -3,7 +3,6 @@
 
 mod pages;
 mod root;
-mod workspace;
 
 use fumi_editor::editor::{self, Editor, Quit};
 use fumi_editor::{driver, metrics};
@@ -25,6 +24,7 @@ fn main() {
 fn run_app() {
     gpui_platform::application().run(move |cx: &mut App| {
         editor::bind_keys(cx);
+        fumi_ui::text_field::bind_keys(cx);
         cx.on_action(|_: &Quit, cx| cx.quit());
         let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
         cx.open_window(

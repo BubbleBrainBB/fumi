@@ -1,0 +1,11 @@
+[package]
+name = "fumi-workspace"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+fumi-core = { path = "../fumi-core" }
+fumi-ui = { path = "../fumi-ui" }
+gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false }
+libc = "0.2"

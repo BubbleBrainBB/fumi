@@ -1,0 +1,15 @@
+[package]
+name = "fumi-memos"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+fumi-core = { path = "../fumi-core" }
+fumi-ui = { path = "../fumi-ui" }
+fumi-workspace = { path = "../fumi-workspace" }
+gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false }
+smallvec = "1"
+
+[dev-dependencies]
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", default-features = false, features = ["font-kit", "runtime_shaders"] }
