@@ -20,7 +20,7 @@ struct LibraryDrag {
 }
 
 impl SidebarView {
-    pub(crate) fn render_libraries_level(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_libraries_level(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = t();
         let entries: Vec<LibraryEntry> = libraries::with(|list| list.entries().to_vec());
         let home = std::env::var("HOME").unwrap_or_default();
@@ -34,7 +34,7 @@ impl SidebarView {
         }
         let height = libraries_content_height(entries.len());
         let scroll = self.libraries_scroll.clone();
-        let scroller = self.scroller(ListKind::Libraries, height, cx);
+        let scroller = self.scroller(ListKind::Libraries, height, window, cx);
 
         div()
             .size_full()
@@ -115,8 +115,9 @@ impl SidebarView {
             .flex_none()
             .top(px(shift))
             .h(px(LIBRARY_ROW_HEIGHT))
-            .pl(px(8.))
-            .pr(px(8.))
+            // 8 with the target stroke, which takes no room in the Swift app.
+            .pl(px(7.))
+            .pr(px(7.))
             .flex()
             .items_center()
             .gap(px(10.))
@@ -157,7 +158,8 @@ impl SidebarView {
                             .children(count.map(|count| div().flex_none().whitespace_nowrap().child(count))),
                     ),
             )
-            .when(!missing && !shows_new_window, |row| {
+            .when(!missing, |row| {
+                // The new-window button takes the chevron's place on hover.
                 row.child(
                     div()
                         .flex_none()
@@ -165,6 +167,7 @@ impl SidebarView {
                         .ml(px(-4.))
                         .flex()
                         .justify_center()
+                        .when(shows_new_window, |slot| slot.opacity(0.))
                         .child(icons::symbol("chevron.right", 9., weight::BOLD, c.faint_icon)),
                 )
             })
@@ -173,7 +176,7 @@ impl SidebarView {
                     div()
                         .id(button_key.clone())
                         .absolute()
-                        .right(px(4.))
+                        .right(px(3.))
                         .top(px((LIBRARY_ROW_HEIGHT - 24.) / 2. - 1.))
                         .w(px(24.))
                         .h(px(24.))
@@ -191,7 +194,7 @@ impl SidebarView {
                         })),
                 )
             })
-            .tooltip(tip(library_tooltip(&entry.path, missing)))
+            .when(!button_hovered, |row| row.tooltip(tip(library_tooltip(&entry.path, missing))))
             .on_hover(self.hover_listener(row_key, cx))
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 // A click goes in; ⌘-click opens the library in a window of its own.

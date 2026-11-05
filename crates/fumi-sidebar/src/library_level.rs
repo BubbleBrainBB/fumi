@@ -39,7 +39,7 @@ impl SidebarView {
         self.hovered.contains(key)
     }
 
-    pub(crate) fn render_library_level(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_library_level(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = t();
         let top = div()
             .flex_none()
@@ -61,7 +61,7 @@ impl SidebarView {
             .flex_col()
             .child(top)
             .child(rule)
-            .child(self.notes_list(cx))
+            .child(self.notes_list(window, cx))
             .child(self.settings_row(cx))
             .child(self.swipe_catcher(cx))
     }
@@ -165,8 +165,8 @@ impl SidebarView {
             .when(glow > 0., |header| header.child(drop_highlight(&c, glow)))
             .on_drag_move(cx.listener(|this, event: &DragMoveEvent<TreeDrag>, _, cx| this.drag_over_header(event.event.position, event.bounds, cx)))
             .on_drag_move(cx.listener(|this, event: &DragMoveEvent<ExternalPaths>, _, cx| this.drag_over_header(event.event.position, event.bounds, cx)))
-            .on_drop(cx.listener(|this, drag: &TreeDrag, _, cx| this.dropped(vec![drag.path.clone()], Some("/"), cx)))
-            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.dropped(paths.paths().to_vec(), Some("/"), cx)))
+            .on_drop(cx.listener(|this, drag: &TreeDrag, window, cx| this.dropped(vec![drag.path.clone()], Some("/"), window, cx)))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| this.dropped(paths.paths().to_vec(), Some("/"), window, cx)))
     }
 
     fn search_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -174,7 +174,8 @@ impl SidebarView {
         div()
             .id("search-row")
             .h(px(30.))
-            .px(px(10.))
+            // 10 with the hairline, which takes no room in the Swift app.
+            .px(px(9.))
             .flex()
             .items_center()
             .gap(px(9.))
@@ -274,7 +275,7 @@ impl SidebarView {
 
     // MARK: The tree
 
-    fn notes_list(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn notes_list(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = t();
         let (loaded, selected_note, selected_file, settings_open, memos_open) = {
             let w = self.workspace.read(cx);
@@ -332,7 +333,7 @@ impl SidebarView {
         }
 
         let tree_scroll = self.tree_scroll.clone();
-        let scroller = self.scroller(ListKind::Tree, height, cx);
+        let scroller = self.scroller(ListKind::Tree, height, window, cx);
         div()
             .relative()
             .flex_1()
@@ -346,8 +347,8 @@ impl SidebarView {
                     .on_scroll(cx.listener(|_, _, _, cx| cx.notify()))
                     .on_drag_move(cx.listener(|this, event: &DragMoveEvent<TreeDrag>, _, cx| this.drag_over_list(event.event.position, event.bounds, cx)))
                     .on_drag_move(cx.listener(|this, event: &DragMoveEvent<ExternalPaths>, _, cx| this.drag_over_list(event.event.position, event.bounds, cx)))
-                    .on_drop(cx.listener(|this, drag: &TreeDrag, _, cx| this.dropped(vec![drag.path.clone()], None, cx)))
-                    .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.dropped(paths.paths().to_vec(), None, cx)))
+                    .on_drop(cx.listener(|this, drag: &TreeDrag, window, cx| this.dropped(vec![drag.path.clone()], None, window, cx)))
+                    .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| this.dropped(paths.paths().to_vec(), None, window, cx)))
                     .child(div().relative().w_full().h(px(height)).children(rows)),
             )
             .children(scroller)
@@ -391,7 +392,7 @@ impl SidebarView {
                 let glow = self.highlight(row.id.as_ref());
                 let element = element
                     .text_color(if open { c.text } else { c.text2 })
-                    .hover(move |row| row.text_color(c.text))
+                    .hover(move |row| row.bg(c.card_hover).text_color(c.text))
                     .child(icon_slot(icons::glyph(glyph, 16., if open { c.text2 } else { c.icon })))
                     .child(
                         div()
@@ -631,23 +632,15 @@ impl SidebarView {
 
     /// A drop on the heading (`folder` given) or on the list, which goes by what
     /// the drag was last over.
-    fn dropped(&mut self, items: Vec<PathBuf>, folder: Option<&str>, cx: &mut Context<Self>) {
-        let target = folder.map(str::to_string).or_else(|| self.drop_state.zone().map(|zone| zone.folder().to_string())).unwrap_or_else(|| "/".to_string());
-        self.drop_state.reset();
-        let this = cx.entity();
-        // Out of the mouse event: a failed move opens a dialog, which needs the window.
-        cx.defer(move |cx| {
-            let Some(handle) = cx.active_window() else { return };
-            let _ = handle.update(cx, |_, window, cx| {
-                this.update(cx, |this, cx| this.move_items(items, &target, window, cx));
-            });
-        });
+    fn dropped(&mut self, items: Vec<PathBuf>, folder: Option<&str>, window: &mut Window, cx: &mut Context<Self>) {
+        let target = folder.or_else(|| self.drop_state.zone().map(Zone::folder)).unwrap_or("/").to_string();
+        self.move_items(items, &target, window, cx);
     }
 
     // MARK: Scroller
 
     /// A list's short overlay thumb, while it's moving.
-    pub(crate) fn scroller(&mut self, list: ListKind, content: f32, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+    pub(crate) fn scroller(&mut self, list: ListKind, content: f32, window: &mut Window, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let c = t();
         let handle = match list {
             ListKind::Tree => self.tree_scroll.clone(),
@@ -661,11 +654,8 @@ impl SidebarView {
             ListKind::Libraries => &mut self.libraries_knob,
         };
         if knob_state.offset != offset || held {
-            let first = knob_state.moved_at.is_none() && knob_state.offset == 0. && !held;
             knob_state.offset = offset;
-            if !first || offset != 0. {
-                knob_state.moved_at = Some(Instant::now());
-            }
+            knob_state.moved_at = Some(Instant::now());
         }
         let moved_at = knob_state.moved_at?;
         let elapsed = moved_at.elapsed();
@@ -692,8 +682,7 @@ impl SidebarView {
         }
         let alpha = if elapsed < KNOB_HOLD { 1. } else { 1. - (elapsed - KNOB_HOLD).as_secs_f32() / KNOB_FADE.as_secs_f32() };
         if elapsed >= KNOB_HOLD {
-            let entity = cx.entity();
-            cx.defer(move |cx| entity.update(cx, |_, cx| cx.notify()));
+            window.request_animation_frame();
         }
         let (y, height) = scroller_knob(viewport, content, offset)?;
         Some(

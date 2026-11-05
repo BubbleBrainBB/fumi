@@ -8,6 +8,8 @@ use gpui::*;
 struct Demo {
     workspace: Entity<Workspace>,
     sidebar: Entity<SidebarView>,
+    // Commands reach the root element by way of the focused one.
+    focus: FocusHandle,
     _subs: Vec<Subscription>,
 }
 
@@ -21,7 +23,7 @@ impl Render for Demo {
             w.model.active_content(),
             if w.model.sidebar_visible { "shown" } else { "hidden" },
         );
-        wire_actions(&self.sidebar, div().id("demo"))
+        wire_actions(&self.sidebar, div().id("demo").track_focus(&self.focus))
             .size_full()
             .flex()
             .bg(c.ground_fill)
@@ -60,7 +62,9 @@ fn open_window(cx: &mut App) {
                 let subs = vec![cx.subscribe(&sidebar, |_, _, event: &SidebarEvent, cx| match event {
                     SidebarEvent::OpenWindow { .. } => open_window(cx),
                 })];
-                Demo { workspace, sidebar, _subs: subs }
+                let focus = cx.focus_handle();
+                focus.focus(window, cx);
+                Demo { workspace, sidebar, focus, _subs: subs }
             })
         },
     )

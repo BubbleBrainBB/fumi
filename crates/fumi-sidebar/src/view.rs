@@ -912,8 +912,14 @@ impl SidebarView {
                 .w(px(DIVIDER_REACH * 2.))
                 .occlude()
                 .cursor(CursorStyle::ResizeColumn)
-                .child(canvas(move |bounds, _, _| left.set(f32::from(bounds.origin.x) + DIVIDER_REACH - 0.), |_, _, _, _| {}).absolute().size_full())
-                .on_mouse_down(MouseButton::Left, cx.listener(|this, event, window, cx| this.divider_down(event, window, cx))),
+                .child(canvas(move |bounds, _, _| left.set(f32::from(bounds.origin.x) + DIVIDER_REACH - width), |_, _, _, _| {}).absolute().size_full())
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, event, window, cx| {
+                        window.prevent_default();
+                        this.divider_down(event, window, cx);
+                    }),
+                ),
         )
     }
 
@@ -939,6 +945,7 @@ impl SidebarView {
                 .hover(move |s| s.bg(c.card_hover))
                 .child(icons::glyph(Glyph::Sidebar, 18., multiply_shade(c.icon, shade)))
                 .tooltip(tip(help))
+                .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx))),
         )
     }
@@ -1021,6 +1028,8 @@ impl Render for SidebarView {
             .flex_none()
             .h_full()
             .w(px(width))
+            // Clicking here leaves the keyboard where it is, in the editor, say.
+            .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
             .when(width > 0., |column| {
                 column
                     .child(div().absolute().left_0().right_0().top_0().h(px(BAND_HEIGHT)).window_control_area(WindowControlArea::Drag))
