@@ -1,0 +1,61 @@
+--- load: { 8.51 9.04 9.28 }
+=== reopen 200k rc=0
+OPEN bytes=200112 lines=2045 items=1846 | launch-to-first-paint=342.7ms read+init=206.1ms rope=0.27ms scan=0.56ms first-draw=0.6ms
+RESULT open-in-running-window: n=7 failed=0 | main-thread busy p50=7.21 p95=8.13 max=8.13 | draw p50=1.19 p95=2.01 | edit-handler p50=0.000 | event-to-painted p50=13.36 p95=13.71 ms
+MEMORY footprint=295MB peak=295MB
+--- load: { 8.51 9.04 9.28 }
+=== type 200k rc=0
+OPEN bytes=200112 lines=2045 items=1846 | launch-to-first-paint=321.7ms read+init=186.6ms rope=0.28ms scan=0.46ms first-draw=0.7ms
+RESULT type: n=100 failed=0 | main-thread busy p50=1.52 p95=2.55 max=6.21 | draw p50=0.74 p95=1.39 | edit-handler p50=0.065 | event-to-painted p50=1.35 p95=2.95 ms
+CHECK undo restored the original bytes: true (1 undos)
+MEMORY footprint=315MB peak=315MB
+--- load: { 8.55 9.04 9.28 }
+=== table 200k rc=0
+OPEN bytes=200112 lines=2045 items=1846 | launch-to-first-paint=375.7ms read+init=219.5ms rope=0.31ms scan=0.55ms first-draw=0.5ms
+CHECK table source is open at the caret: true
+RESULT table: n=60 failed=0 | main-thread busy p50=1.74 p95=2.53 max=4.06 | draw p50=0.73 p95=1.24 | edit-handler p50=0.073 | event-to-painted p50=1.57 p95=3.02 ms
+CHECK undo restored the original bytes: true (1 undos)
+MEMORY footprint=316MB peak=316MB
+--- load: { 8.59 9.04 9.28 }
+=== enter 200k rc=0
+OPEN bytes=200112 lines=2045 items=1846 | launch-to-first-paint=356.3ms read+init=202.1ms rope=0.28ms scan=0.46ms first-draw=0.6ms
+RESULT enter: n=40 failed=0 | main-thread busy p50=1.53 p95=3.74 max=8.15 | draw p50=0.60 p95=2.56 | edit-handler p50=0.097 | event-to-painted p50=1.37 p95=3.26 ms
+CHECK undo restored the original bytes: true (40 undos)
+MEMORY footprint=342MB peak=342MB
+--- load: { 9.02 9.12 9.30 }
+=== scroll 200k rc=0
+OPEN bytes=200112 lines=2045 items=1846 | launch-to-first-paint=393.1ms read+init=236.7ms rope=0.32ms scan=0.55ms first-draw=0.7ms
+RESULT scroll: 676 wheel events, item 0->226 of 1846, 691 frames in 6.1s (113 fps) | draw>16.7ms=0 draw p50=1.26 p95=2.36 max=10.44 | main-thread stretches>16.7ms=0 longest=12.8 | missed vsync (gap>25ms)=1 longest gap=58.0 | busy 21%
+CHECK scroll moved: true
+MEMORY footprint=339MB peak=341MB
+--- load: { 8.78 9.07 9.28 }
+=== reopen 1m rc=0
+OPEN bytes=1000072 lines=10813 items=9518 | launch-to-first-paint=308.7ms read+init=169.7ms rope=1.29ms scan=2.15ms first-draw=0.8ms
+RESULT open-in-running-window: n=7 failed=0 | main-thread busy p50=14.54 p95=15.05 max=15.05 | draw p50=0.38 p95=0.81 | edit-handler p50=0.000 | event-to-painted p50=21.03 p95=21.49 ms
+MEMORY footprint=306MB peak=306MB
+--- load: { 8.78 9.07 9.28 }
+=== type 1m rc=0
+OPEN bytes=1000072 lines=10813 items=9518 | launch-to-first-paint=309.2ms read+init=163.9ms rope=1.29ms scan=1.99ms first-draw=0.8ms
+RESULT type: n=100 failed=0 | main-thread busy p50=2.85 p95=3.74 max=6.19 | draw p50=1.49 p95=2.21 | edit-handler p50=0.087 | event-to-painted p50=2.30 p95=4.50 ms
+CHECK undo restored the original bytes: true (1 undos)
+MEMORY footprint=319MB peak=319MB
+--- load: { 8.32 8.97 9.25 }
+=== table 1m rc=0
+OPEN bytes=1000072 lines=10813 items=9518 | launch-to-first-paint=318.2ms read+init=183.1ms rope=1.29ms scan=2.10ms first-draw=0.8ms
+CHECK table source is open at the caret: true
+RESULT table: n=60 failed=0 | main-thread busy p50=2.66 p95=4.05 max=5.37 | draw p50=1.42 p95=2.11 | edit-handler p50=0.126 | event-to-painted p50=2.49 p95=3.63 ms
+CHECK undo restored the original bytes: true (1 undos)
+MEMORY footprint=319MB peak=319MB
+--- load: { 7.97 8.89 9.22 }
+=== enter 1m rc=0
+OPEN bytes=1000072 lines=10813 items=9518 | launch-to-first-paint=333.2ms read+init=178.4ms rope=1.34ms scan=1.97ms first-draw=0.7ms
+RESULT enter: n=40 failed=0 | main-thread busy p50=1.99 p95=2.84 max=6.27 | draw p50=0.59 p95=1.41 | edit-handler p50=0.166 | event-to-painted p50=1.49 p95=2.64 ms
+CHECK undo restored the original bytes: true (40 undos)
+MEMORY footprint=347MB peak=347MB
+--- load: { 7.41 8.76 9.17 }
+=== scroll 1m rc=0
+OPEN bytes=1000072 lines=10813 items=9518 | launch-to-first-paint=317.6ms read+init=179.5ms rope=1.34ms scan=2.09ms first-draw=0.8ms
+RESULT scroll: 669 wheel events, item 0->201 of 9518, 688 frames in 6.1s (113 fps) | draw>16.7ms=0 draw p50=1.37 p95=2.55 max=7.94 | main-thread stretches>16.7ms=0 longest=8.7 | missed vsync (gap>25ms)=1 longest gap=50.5 | busy 26%
+CHECK scroll moved: true
+MEMORY footprint=350MB peak=352MB
+DONE
