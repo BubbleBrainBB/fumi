@@ -298,6 +298,20 @@ pub fn get_dict_data(key: &str, sub: &str) -> Option<Vec<u8>> {
     }
 }
 
+/// Sets `dictionary[sub]` to a string, keeping the other entries.
+pub fn set_dict_string(key: &str, sub: &str, value: &str) {
+    unsafe {
+        let old = object(key);
+        let dict: id = if old != nil {
+            msg_send![class!(NSMutableDictionary), dictionaryWithDictionary: old]
+        } else {
+            msg_send![class!(NSMutableDictionary), dictionary]
+        };
+        let _: () = msg_send![dict, setObject: ns(value) forKey: ns(sub)];
+        let _: () = msg_send![defaults(), setObject: dict forKey: ns(key)];
+    }
+}
+
 pub fn set_dict_data(key: &str, sub: &str, value: &[u8]) {
     unsafe {
         let old = object(key);

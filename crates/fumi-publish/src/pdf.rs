@@ -378,6 +378,39 @@ fn image_of_render(image: &gpui::RenderImage, w: f64, h: f64) -> id {
     }
 }
 
+/// `image` as a bitmap of `scale` pixels to the point, autoreleased.
+fn rasterized(image: id, size: NSSize, scale: f64) -> id {
+    unsafe {
+        let rep: id = msg_send![class!(NSBitmapImageRep), alloc];
+        let planes: *mut *mut u8 = std::ptr::null_mut();
+        let rep: id = msg_send![rep,
+            initWithBitmapDataPlanes: planes
+            pixelsWide: (size.width * scale).ceil() as i64
+            pixelsHigh: (size.height * scale).ceil() as i64
+            bitsPerSample: 8i64
+            samplesPerPixel: 4i64
+            hasAlpha: true
+            isPlanar: false
+            colorSpaceName: ns("NSDeviceRGBColorSpace")
+            bytesPerRow: 0i64
+            bitsPerPixel: 0i64];
+        if rep == nil {
+            return image;
+        }
+        let _: () = msg_send![rep, setSize: size];
+        let _: () = msg_send![class!(NSGraphicsContext), saveGraphicsState];
+        let context: id = msg_send![class!(NSGraphicsContext), graphicsContextWithBitmapImageRep: rep];
+        let _: () = msg_send![class!(NSGraphicsContext), setCurrentContext: context];
+        let _: () = msg_send![image, drawInRect: rect(0., 0., size.width, size.height)];
+        let _: () = msg_send![class!(NSGraphicsContext), restoreGraphicsState];
+        let out: id = msg_send![class!(NSImage), alloc];
+        let out: id = msg_send![out, initWithSize: size];
+        let _: () = msg_send![out, addRepresentation: rep];
+        let _: () = msg_send![rep, release];
+        msg_send![out, autorelease]
+    }
+}
+
 fn attachment(image: id, x: f64, y: f64, w: f64, h: f64) -> id {
     unsafe {
         let attachment: id = msg_send![class!(NSTextAttachment), new];
@@ -1353,6 +1386,8 @@ fn draw_line(row: &PageRow, laid: &LaidLine, column_x: f64, column: f64, shift: 
                 let image: id = msg_send![symbol, imageWithSymbolConfiguration: config];
                 if image != nil {
                     let size: NSSize = msg_send![image, size];
+                    // A symbol drawn straight into a PDF comes out a solid block.
+                    let image = rasterized(image, size, 4.);
                     let cy = top_y + this.baseline - laid.metrics.2 / 2.;
                     let area = rect(column_x + 14. + (16. - size.width) / 2., cy - size.height / 2., size.width, size.height);
                     let zero = rect(0., 0., 0., 0.);
@@ -1512,6 +1547,8 @@ mod tests {
     fn sample_for_a_look() {
         let Ok(path) = std::env::var("FUMI_PDF_SAMPLE") else { return };
         let note = "---\ntitle: Sample\ntags: [one, two]\n---\n\n# A Sample Note\n\nBody text with **bold**, *italic*, `inline code`, ~~struck~~ and a [link](https://example.com). 中文和 English 混排，看看行高。\n\n## Lists\n\n- first\n- second\n  - nested\n\n1. one\n2. two\n\n- [ ] open task\n- [x] done task\n\n> A quote\n> > nested\n\n> [!warning] Careful\n> Inside the callout.\n\n```rust\nfn main() {\n    println!(\"hi\");\n}\n```\n\n---\n\n| Name | Count |\n| ---- | ----: |\n| a | 1 |\n| b | 22 |\n\nInline $x^2$ math.\n\n$$\n\\frac{a}{b}\n$$\n";
-        std::fs::write(path, render(note, &config("Sample"), None, None, None).unwrap()).unwrap();
+        std::fs::write(&path, render(note, &config("Sample"), None, None, None).unwrap()).unwrap();
+        let rest = &note[note.find("> [!warning]").unwrap()..];
+        std::fs::write(format!("{path}.rest.pdf"), render(rest, &config("Sample"), None, None, None).unwrap()).unwrap();
     }
 }

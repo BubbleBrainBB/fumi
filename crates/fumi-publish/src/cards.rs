@@ -386,23 +386,41 @@ mod tests {
         std::future::poll_fn(|_| if start.elapsed() >= wait { std::task::Poll::Ready(()) } else { std::task::Poll::Pending }).await
     }
 
-    /// WebKit wants the main thread: `cargo test --lib -p fumi-publish -- --ignored
-    /// --test-threads=1`. `FUMI_CARDS_SAMPLE` names a folder to leave the PNGs in.
+    /// WebKit wants the main thread and libtest doesn't run tests there, so this
+    /// hook, run before `main`, does the real checks when asked to. The test below
+    /// asks by running this binary again. Nothing appears on screen: the window is
+    /// far off it and the process has no Dock icon.
+    #[used]
+    #[unsafe(link_section = "__DATA,__mod_init_func")]
+    static MAIN_THREAD_HOOK: extern "C" fn() = {
+        extern "C" fn hook() {
+            if std::env::var_os("FUMI_WEBKIT_CHECK").is_some() {
+                webkit_checks();
+                std::process::exit(0);
+            }
+        }
+        hook
+    };
+
+    /// `cargo test --lib -p fumi-publish -- --ignored`. `FUMI_CARDS_SAMPLE` names a
+    /// folder to leave the PNGs in.
     #[test]
     #[ignore]
-    fn offscreen_cards_are_1080_wide_pngs() {
-        unsafe extern "C" {
-            fn pthread_main_np() -> i32;
-        }
-        assert_eq!(unsafe { pthread_main_np() }, 1, "run with --test-threads=1");
-        unsafe {
-            let _: id = msg_send![class!(NSApplication), sharedApplication];
-        }
+    fn webkit_on_the_main_thread() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap()).env("FUMI_WEBKIT_CHECK", "1").output().unwrap();
+        let (out, err) = (String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        assert!(output.status.success(), "{out}\n{err}");
+        assert!(out.contains("webkit checks passed"), "{out}\n{err}");
+    }
+
+    fn next_event(events: &mut mpsc::UnboundedReceiver<WebEvent>) -> WebEvent {
+        on_run_loop(events.next()).expect("the web view is still there")
+    }
+
+    fn sample_input() -> Input {
         let note = "# A Title\n\nThe first paragraph of the note, with **bold** words and enough text to fill a card.\n\n## A Heading\n\n- one\n- two\n\n> A quote.\n\n".repeat(6);
-        let choices = xhs::NoteChoices::default();
-        let deck = xhs::deck_for(&note, "/tmp/note.md", &choices);
-        let input = Input {
-            deck,
+        Input {
+            deck: xhs::deck_for(&note, "/tmp/note.md", &xhs::NoteChoices::default()),
             template: "memo".into(),
             ratio: "3:4".into(),
             page_numbers: true,
@@ -410,7 +428,87 @@ mod tests {
             end_card: xhs::EndCard { on: false, line: String::new() },
             accent: "#1D6FC2".into(),
             mode: "preview".into(),
-        };
+        }
+    }
+
+    fn webkit_checks() {
+        unsafe {
+            let app: id = msg_send![class!(NSApplication), sharedApplication];
+            let _: bool = msg_send![app, setActivationPolicy: 2i64]; // NSApplicationActivationPolicyProhibited
+        }
+        load_framework("WebKit");
+
+        // The article: page, script messages, in-place updates, link policy.
+        let config = WebConfig { handler: "wechat", opens_links: false, assets: false, forwards_to: None };
+        let (web_view, delegate, sink, mut events) = web::make_web_view(&config).expect("WebKit");
+        unsafe {
+            let base: id = nil;
+            let _: id = msg_send![web_view, loadHTMLString: ns(crate::wechat::ARTICLE_PAGE) baseURL: base];
+        }
+        assert_eq!(next_event(&mut events), WebEvent::Finished);
+        let shown = crate::wechat::Shown { html: "<p>Body <a href='https://example.com/x' id='l'>link</a></p>".into(), title: "T".into(), is_dark: true };
+        web::evaluate(web_view, &crate::wechat::update_script(None, &shown));
+        let answer = on_run_loop(web::call_async(
+            web_view,
+            "return JSON.stringify([document.getElementById('title').textContent, document.body.className, document.getElementById('article').textContent, document.getElementById('head').className])",
+            "{}",
+        ));
+        assert_eq!(answer.unwrap().unwrap(), r#"["T","dark","Body link",""]"#);
+        web::evaluate(web_view, "document.getElementById('copy').click()");
+        assert_eq!(next_event(&mut events), WebEvent::Message(serde_json::Value::String("copyTitle".into())));
+        web::evaluate(web_view, "dispatchEvent(new MouseEvent('mousedown'))");
+        assert_eq!(next_event(&mut events), WebEvent::Message(serde_json::Value::String("pointer".into())));
+        // A clicked link is refused, so the page stays: no second load finishes.
+        web::evaluate(web_view, "document.getElementById('l').click()");
+        on_run_loop(pause(Duration::from_millis(300)));
+        let still = on_run_loop(web::call_async(web_view, "return location.href", "{}")).unwrap().unwrap();
+        assert_eq!(still, "about:blank");
+        // An exception comes back as its message.
+        let failed = on_run_loop(web::call_async(web_view, "throw new Error('boom')", "{}")).unwrap().unwrap_err();
+        assert!(failed.contains("boom"), "{failed}");
+        release_web_view_for_test(web_view, delegate, sink, "wechat");
+
+        // The cards in the preview: fumi-xhs://, layout, the menu message.
+        let config = WebConfig { handler: "xhs", opens_links: false, assets: true, forwards_to: None };
+        let (web_view, delegate, sink, mut events) = web::make_web_view(&config).expect("WebKit");
+        unsafe {
+            let window: id = msg_send![class!(NSWindow), alloc];
+            let window: id = msg_send![window, initWithContentRect: rect(-20000., -20000., 420., 800.) styleMask: 0u64 backing: 2u64 defer: false];
+            let _: () = msg_send![web_view, setFrame: rect(0., 0., 420., 800.)];
+            let _: () = msg_send![window, setContentView: web_view];
+            let _: () = msg_send![window, orderFrontRegardless];
+            let url: id = msg_send![class!(NSURL), URLWithString: ns(web::CARDS_PAGE_URL)];
+            let request: id = msg_send![class!(NSURLRequest), requestWithURL: url];
+            let _: id = msg_send![web_view, loadRequest: request];
+        }
+        assert_eq!(next_event(&mut events), WebEvent::Finished);
+        let input = sample_input();
+        let answer = on_run_loop(web::call_async(web_view, LAYOUT_SCRIPT, &input.json())).unwrap().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&answer).unwrap();
+        assert!(value["count"].as_u64().unwrap() >= 2, "{answer}");
+        assert!(value["height"].as_f64().unwrap() > 100., "{answer}");
+        web::evaluate(
+            web_view,
+            "document.querySelector('.cell').dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, clientX:12, clientY:34}))",
+        );
+        match next_event(&mut events) {
+            WebEvent::Message(menu) => {
+                assert_eq!(menu["type"], "menu");
+                assert_eq!(menu["index"], 0);
+                assert_eq!(menu["x"], 12);
+                assert_eq!(menu["y"], 34);
+                assert!(menu["ids"].is_array());
+            }
+            other => panic!("{other:?}"),
+        }
+        web::evaluate(web_view, "FumiXhs.menuClosed()");
+        // A still for when something floats above it.
+        let shot = on_run_loop(web::snapshot(web_view, nil)).unwrap().unwrap() as id;
+        let size: NSSize = unsafe { msg_send![shot, size] };
+        assert_eq!((size.width, size.height), (420., 800.));
+        release_web_view_for_test(web_view, delegate, sink, "xhs");
+
+        // Export: exact pixels, one at a time or all.
         let images = on_run_loop(render_with(&input, None, &|wait| pause(wait))).expect("rendered");
         assert!(images.len() >= 2, "{} cards", images.len());
         for (index, png) in images.iter().enumerate() {
@@ -428,6 +526,11 @@ mod tests {
         }
         let one = on_run_loop(render_with(&input, Some(1), &|wait| pause(wait))).expect("rendered one");
         assert_eq!(one.len(), 1);
+        println!("webkit checks passed");
+    }
+
+    fn release_web_view_for_test(web_view: id, delegate: id, sink: *mut mpsc::UnboundedSender<WebEvent>, handler: &str) {
+        web::release_web_view(web_view, delegate, sink, handler);
     }
 
     #[test]
