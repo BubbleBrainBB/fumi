@@ -375,8 +375,8 @@ fn post_mouse_move(x: f64, y: f64) {
 }
 
 /// `FUMI_DRIVE=script FUMI_SCRIPT=file`: one step a line, for checking things on
-/// screen in a fixture. `click x y`, `move x y`, `drag x0 y0 x1 y1`, `scroll x y
-/// dy`, `key left|right|up|down|enter|backspace`, `type text`, `wait ms`, `shot
+/// screen in a fixture. `click x y`, `move x y`, `drag x0 y0 x1 y1`, `wheel dy`
+/// (over the point 550,400), `drop path`, `paste name` (a named pasteboard), `lines a b`, `key left|right|up|down|enter|backspace`, `type text`, `wait ms`, `shot
 /// file.png`, `state`.
 async fn run_script(window: WindowHandle<Editor>, cx: &mut AsyncApp) {
     let path = std::env::var("FUMI_SCRIPT").unwrap_or_default();
@@ -388,7 +388,7 @@ async fn run_script(window: WindowHandle<Editor>, cx: &mut AsyncApp) {
             "click" => fumi_ui::native::post_click(n[0], n[1]),
             "move" => post_mouse_move(n[0], n[1]),
             "drag" => fumi_ui::native::post_mouse_drag(n[0], n[1], n[2], n[3]),
-            "scroll" => fumi_ui::native::scroll_at(n[0], n[1], n[2] as i32),
+            "wheel" => post_scroll(n[0] as i32),
             "wait" => sleep(cx, n[0] as u64).await,
             "shot" => println!("SHOT {rest} {}", self_shot(rest)),
             "key" => post(&match rest {
@@ -400,6 +400,23 @@ async fn run_script(window: WindowHandle<Editor>, cx: &mut AsyncApp) {
                 _ => k_backspace(),
             }),
             "type" => rest.chars().for_each(|c| post(&char_key(c))),
+            "drop" => {
+                let paths = ExternalPaths(smallvec::smallvec![std::path::PathBuf::from(rest)]);
+                let _ = window.update(cx, |e, window, cx| e.drop_files(&paths, window, cx));
+            }
+            "paste" => {
+                let _ = window.update(cx, |e, _, cx| {
+                    let board = crate::paste::read_from(crate::paste::named_pasteboard(rest));
+                    e.paste_board(board, cx)
+                });
+            }
+            "lines" => {
+                let text = window.update(cx, |e, _, _| {
+                    let (a, b) = (n[0] as usize, (n[1] as usize).min(e.doc.line_count()));
+                    (a..b).map(|l| e.doc.line_text(l)).collect::<Vec<_>>()
+                });
+                println!("STATE lines {text:?}");
+            }
             "state" => {
                 let state = window.update(cx, |e, _, cx| e.media_state(cx)).unwrap_or_default();
                 println!("STATE {state}");

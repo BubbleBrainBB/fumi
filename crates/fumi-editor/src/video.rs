@@ -292,6 +292,17 @@ impl VideoPlayer {
         }
     }
 
+    fn has_new_frame(&self) -> bool {
+        // A paused video being sought keeps drawing until it settles.
+        if !self.is_playing() {
+            return true;
+        }
+        unsafe {
+            let now: CMTime = msg_send![self.output, itemTimeForHostTime: CACurrentMediaTime()];
+            msg_send![self.output, hasNewPixelBufferForItemTime: now]
+        }
+    }
+
     /// The newest frame due by now.
     fn pull(&mut self) -> Option<CFRetained<CVPixelBuffer>> {
         unsafe {
@@ -417,6 +428,8 @@ pub struct VideoUi {
     pub moved_at: Instant,
     /// Set by a paint: something is playing on screen.
     pub live: Cell<bool>,
+    /// Something's already watching for that video's next frame.
+    pub watching: Cell<bool>,
     /// Set by a paint: an animated image's next frame is due by then.
     pub next_frame: Cell<Option<Instant>>,
 }
@@ -428,12 +441,18 @@ impl Default for VideoUi {
             hovered: None,
             moved_at: Instant::now(),
             live: Cell::new(false),
+            watching: Cell::new(false),
             next_frame: Cell::new(None),
         }
     }
 }
 
 impl VideoUi {
+    /// Whether a playing video has something new to draw, or stopped playing.
+    pub fn frame_due(&mut self) -> bool {
+        self.players.iter().all(|p| !p.is_live()) || self.players.iter().any(|p| p.is_live() && p.has_new_frame())
+    }
+
     pub fn player_on(&self, line: usize, path: &Path) -> Option<usize> {
         self.players.iter().position(|p| p.line == line && p.path == path)
     }
@@ -719,7 +738,12 @@ fn paint_player(
     if let Some(buffer) = player.pull() {
         let (w, h) = (CVPixelBufferGetWidth(&buffer) as f32, CVPixelBufferGetHeight(&buffer) as f32);
         let (x, y, fit_w, fit_h) = media::aspect_fit((w, h), (f32::from(area.size.width), f32::from(area.size.height)));
-        let fit = Bounds::new(point(area.left() + px(x), area.top() + px(y)), size(px(fit_w), px(fit_h)));
+        // A rounded height shouldn't leave a hairline of the ground showing.
+        let fit = if x < 1. && y < 1. {
+            area
+        } else {
+            Bounds::new(point(area.left() + px(x), area.top() + px(y)), size(px(fit_w), px(fit_h)))
+        };
         window.paint_surface(fit, buffer);
     }
     // Glass has no page color to paint with, so its video keeps square corners.

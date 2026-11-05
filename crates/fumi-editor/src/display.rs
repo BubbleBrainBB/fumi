@@ -111,7 +111,8 @@ pub fn family_font(family: &str) -> Font {
     let name: String = match family {
         "System" | "" => ".SystemUIFont".into(),
         "SF Mono" => return mono_font(),
-        "New York" => "New York".into(),
+        // The system serif; not a family font lookups can find by name.
+        "New York" => ".AppleSystemUIFontSerif".into(),
         other => other.into(),
     };
     let mut f = font(name);
@@ -2025,5 +2026,165 @@ mod tests {
         assert_eq!(d.text.as_ref(), "a $x^2$ b");
         // Not a price.
         assert_eq!(line("$5 and $6", Kind::Para, false).text.as_ref(), "$5 and $6");
+    }
+
+    struct Fake;
+
+    impl MediaLookup for Fake {
+        fn lookup(&self, dest: &str, embed: bool) -> Lookup {
+            match dest {
+                "pending.png" => Lookup::Pending,
+                "missing.png" | "missing" => Lookup::Missing,
+                _ => Lookup::Ready(MediaInfo {
+                    key: dest.into(),
+                    kind: if dest.ends_with(".gif") {
+                        crate::media::MediaKind::Image { animated: true }
+                    } else {
+                        crate::media::MediaKind::Image { animated: false }
+                    },
+                    natural: Some((100., 50.)),
+                    settling: embed && dest == "settling.png",
+                }),
+            }
+        }
+    }
+
+    fn media_line(src: &str, caret: Option<usize>) -> DisplayLine {
+        let typo = Typography::default();
+        build_line(
+            src,
+            &LineCtx {
+                kind: if is_lone_image(src.trim()) { Kind::Image } else { Kind::Para },
+                caret,
+                title: false,
+                marked: None,
+                prev: Kind::Blank,
+                next: Kind::Blank,
+                media: Some(&Fake),
+                reveal_media: true,
+                block_type: "",
+                typo: &typo,
+                links: None,
+                real: true,
+                raw_block: false,
+                prev_has_caret: false,
+            },
+        )
+    }
+
+    fn medias(d: &DisplayLine) -> Vec<&InlineMedia> {
+        d.spans.iter().filter_map(|s| s.media.as_deref()).collect()
+    }
+
+    #[core::prelude::v1::test]
+    fn a_lone_image_collapses_to_one_box_with_its_spacing() {
+        let src = "![a cat](a.png)";
+        let d = media_line(src, None);
+        assert_eq!(d.text.as_ref(), "\u{FFFC}");
+        let m = medias(&d)[0];
+        assert_eq!((m.caption.as_str(), m.fills_line, m.src.clone()), ("a cat", false, 0..src.len()));
+        assert_eq!(d.metric, LineMetric::Natural { spacing: 4. });
+        assert_eq!((d.top, d.bottom), (px(8.), px(8.)));
+    }
+
+    #[core::prelude::v1::test]
+    fn a_revealed_image_follows_its_source_and_stands_for_no_text() {
+        let src = "![a cat](a.png)";
+        for caret in [0, 3, src.len()] {
+            let d = media_line(src, Some(caret));
+            assert_eq!(d.text.as_ref(), format!("{src}\u{FFFC}"));
+            assert!(medias(&d)[0].fills_line);
+            assert_eq!(d.metric, LineMetric::Natural { spacing: 10. });
+            // The source's end is the box's start: the caret stays on the text.
+            assert_eq!(d.src_to_disp(src.len()), src.len());
+            assert_eq!(d.disp_to_src(src.len() + OBJECT.len_utf8()), src.len());
+        }
+    }
+
+    #[core::prelude::v1::test]
+    fn the_caret_past_a_box_maps_past_its_source() {
+        let src = "x ![](a.png) y";
+        let d = media_line(src, None);
+        assert_eq!(d.text.as_ref(), "x \u{FFFC} y");
+        let after = 2 + "![](a.png)".len();
+        assert_eq!(d.src_to_disp(after), 2 + OBJECT.len_utf8());
+        assert_eq!(d.disp_to_src(2 + OBJECT.len_utf8()), after);
+        assert_eq!(d.src_to_disp(2), 2);
+    }
+
+    #[core::prelude::v1::test]
+    fn an_image_opening_a_line_sets_its_spacing_and_one_further_along_does_not() {
+        assert_eq!(media_line("![](a.png) words", None).metric, LineMetric::Natural { spacing: 4. });
+        let d = media_line("words ![](a.png) words", None);
+        assert_eq!(d.metric, LineMetric::Fixed(Typography::default().line));
+        assert_eq!(d.top, px(0.));
+        // Unless its source shows.
+        let d = media_line("words ![](a.png) words", Some(8));
+        assert_eq!(d.metric, LineMetric::Natural { spacing: 10. });
+        assert_eq!(d.text.as_ref(), "words ![](a.png)\u{FFFC} words");
+    }
+
+    #[core::prelude::v1::test]
+    fn what_can_not_be_shown_stays_source() {
+        for src in ["![alt](missing.png)", "![alt](pending.png)"] {
+            let d = media_line(src, None);
+            assert_eq!(d.text.as_ref(), src);
+            assert_eq!(d.metric, LineMetric::Fixed(Typography::default().line), "{src}");
+            assert_eq!(d.top, px(0.));
+        }
+        assert!(media_line("![alt](pending.png)", None).media_pending);
+        assert!(!media_line("![alt](missing.png)", None).media_pending);
+        // Alt quieter than the rest, as in Fumi.
+        let d = media_line("![alt](missing.png)", None);
+        let c = t();
+        let color_of = |at: usize| d.spans.iter().find(|s| s.range.contains(&at)).unwrap().color;
+        assert_eq!(color_of(2), c.text3);
+        assert_eq!(color_of(8), c.faint_text);
+        // An embed nothing answers to is plain text, and no link.
+        let d = media_line("![[missing]]", None);
+        assert_eq!(d.text.as_ref(), "![[missing]]");
+        assert!(d.links.is_empty());
+    }
+
+    #[core::prelude::v1::test]
+    fn embeds_have_no_caption_and_inline_code_holds_no_images() {
+        let d = media_line("![[a.png|300]]", None);
+        assert_eq!(medias(&d)[0].caption, "");
+        assert_eq!(d.text.as_ref(), "\u{FFFC}");
+        let d = media_line("`![](a.png)` x", None);
+        assert!(medias(&d).is_empty());
+    }
+
+    #[core::prelude::v1::test]
+    fn a_selection_passing_over_leaves_images_closed() {
+        let typo = Typography::default();
+        let src = "![](a.png)";
+        let d = build_line(
+            src,
+            &LineCtx {
+                kind: Kind::Image,
+                caret: Some(3),
+                title: false,
+                marked: None,
+                prev: Kind::Blank,
+                next: Kind::Blank,
+                media: Some(&Fake),
+                reveal_media: false,
+                block_type: "",
+                typo: &typo,
+                links: None,
+                real: true,
+                raw_block: false,
+                prev_has_caret: false,
+            },
+        );
+        assert_eq!(d.text.as_ref(), "\u{FFFC}");
+    }
+
+    #[core::prelude::v1::test]
+    fn media_spans_are_found_in_order_outside_code() {
+        let spans = media_spans("a ![x](b.mp4) `![](c.png)` ![[d.mov|2]]");
+        let dests: Vec<_> = spans.iter().map(|m| (m.dest.as_str(), m.embed)).collect();
+        assert_eq!(dests, [("b.mp4", false), ("d.mov|2", true)]);
     }
 }

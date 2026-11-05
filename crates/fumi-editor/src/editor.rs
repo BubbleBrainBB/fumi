@@ -1129,8 +1129,16 @@ impl Editor {
 
     /// Files that are images or videos, or else image data, become embeds.
     fn paste_media(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.library.is_none() {
+            return false;
+        }
+        self.paste_board(paste::read_general(), cx)
+    }
+
+    /// Imports what a pasteboard held and links it in. False if there's nothing
+    /// for it to do, and the paste is an ordinary one.
+    pub fn paste_board(&mut self, board: paste::PastedMedia, cx: &mut Context<Self>) -> bool {
         let Some(library) = self.library.clone() else { return false };
-        let board = paste::read_general();
         let imported: Vec<PathBuf> = if board.has_files {
             board
                 .files
@@ -1177,7 +1185,7 @@ impl Editor {
 
     /// Image and video files dropped on the page go in at the character nearest
     /// the pointer; other drags have nothing to do here.
-    fn drop_files(&mut self, paths: &ExternalPaths, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn drop_files(&mut self, paths: &ExternalPaths, window: &mut Window, cx: &mut Context<Self>) {
         let Some(library) = self.library.clone() else { return };
         let imported: Vec<PathBuf> = paths
             .paths()
@@ -1686,6 +1694,7 @@ impl Render for Editor {
         self.note_scroll(window, cx);
 
         let entity = cx.entity();
+        let measured = cx.weak_entity();
         let focus = self.focus.clone();
         let thumb = self.scroll_thumb();
         let status = self.show_status.then(|| self.status_text());
@@ -1743,7 +1752,16 @@ impl Render for Editor {
             }))
             .child(
                 canvas(
-                    |_, _, _| {},
+                    // The column centers in this editor's own width, which only
+                    // layout knows. A change takes effect on the next frame.
+                    move |bounds, _, cx| {
+                        let _ = measured.update(cx, |e, cx| {
+                            if e.pane_width != Some(bounds.size.width) {
+                                e.pane_width = Some(bounds.size.width);
+                                cx.notify();
+                            }
+                        });
+                    },
                     move |bounds, _, window, cx| {
                         window.handle_input(
                             &focus,
@@ -1753,7 +1771,7 @@ impl Render for Editor {
                         if media::with_store(|s| s.has_queued()) {
                             media::pump(cx);
                         }
-                        media_clock(&videos, &frame_timer, &entity, window, cx);
+                        media_clock(&videos, &frame_timer, &entity, cx);
                         metrics::frame_end();
                     },
                 )
@@ -1769,15 +1787,30 @@ fn media_clock(
     videos: &Rc<RefCell<VideoUi>>,
     frame_timer: &Rc<std::cell::Cell<Option<Instant>>>,
     entity: &Entity<Editor>,
-    window: &mut Window,
     cx: &mut App,
 ) {
     let ui = videos.borrow();
-    if ui.live.get() {
+    if ui.live.get() && !ui.watching.replace(true) {
+        // Looks often, and draws only when the video has a new frame: a clip at
+        // 24 fps needn't redraw the page 120 times a second.
         let weak = entity.downgrade();
-        window.on_next_frame(move |_, cx| {
-            let _ = weak.update(cx, |_, cx| cx.notify());
-        });
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            loop {
+                cx.background_executor().timer(Duration::from_millis(8)).await;
+                let ready = weak.update(cx, |e, cx| {
+                    let ready = e.videos.borrow_mut().frame_due();
+                    if ready {
+                        e.videos.borrow().watching.set(false);
+                        cx.notify();
+                    }
+                    ready
+                });
+                if ready.unwrap_or(true) {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
     let Some(due) = ui.next_frame.get() else { return };
     let now = Instant::now();
@@ -2074,7 +2107,9 @@ impl Editor {
             .map(|i| format!("{}@{:.0}+{:.0}", i.first_line, f32::from(i.bounds.top()), f32::from(i.bounds.size.height)))
             .collect();
         format!(
-            "head={} anchor={} caret_line={} top=({},{:.1}) items={} panel={} players={players:?} painted={painted:?}",
+            "frames={} doc_bytes={} head={} anchor={} caret_line={} top=({},{:.1}) items={} panel={} players={players:?} painted={painted:?}",
+            metrics::frames(),
+            self.doc.len(),
             self.head,
             self.anchor,
             self.caret_line,

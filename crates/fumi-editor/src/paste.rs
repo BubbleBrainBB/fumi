@@ -50,8 +50,19 @@ fn tiff_to_png(tiff: &[u8]) -> Option<Vec<u8>> {
 }
 
 pub fn read_general() -> PastedMedia {
-    with_pool(|| unsafe {
-        let pasteboard: id = msg_send![class!(NSPasteboard), generalPasteboard];
+    with_pool(|| {
+        let pasteboard: id = unsafe { msg_send![class!(NSPasteboard), generalPasteboard] };
+        read_from(pasteboard)
+    })
+}
+
+/// A private pasteboard by name, for trying this without touching the user's.
+pub fn named_pasteboard(name: &str) -> id {
+    unsafe { msg_send![class!(NSPasteboard), pasteboardWithName: ns(name)] }
+}
+
+pub fn read_from(pasteboard: id) -> PastedMedia {
+    unsafe {
         let classes: id = msg_send![class!(NSArray), arrayWithObject: class!(NSURL)];
         let options: id = msg_send![class!(NSMutableDictionary), dictionary];
         let yes: id = msg_send![class!(NSNumber), numberWithBool: true as objc::runtime::BOOL];
@@ -86,7 +97,7 @@ pub fn read_general() -> PastedMedia {
             out.image = Some((png, "png"));
         }
         out
-    })
+    }
 }
 
 /// The text that links `links` in: one per line, starting a new line unless the
@@ -115,6 +126,87 @@ pub fn utc_offset(now: i64) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn board(name: &str) -> id {
+        let board = named_pasteboard(name);
+        unsafe {
+            let _: isize = msg_send![board, clearContents];
+        }
+        board
+    }
+
+    fn put(board: id, kind: &str, data: &[u8]) {
+        unsafe {
+            let types: id = msg_send![class!(NSArray), arrayWithObject: ns(kind)];
+            let _: isize = msg_send![board, addTypes: types owner: nil];
+            let data: id = msg_send![class!(NSData), dataWithBytes: data.as_ptr() length: data.len()];
+            let _: bool = msg_send![board, setData: data forType: ns(kind)];
+        }
+    }
+
+    #[core::prelude::v1::test]
+    fn pasteboards_are_read_in_the_right_order() {
+        let png = {
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            image::RgbaImage::new(4, 4).write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+            bytes.into_inner()
+        };
+        with_pool(|| {
+            let b = board("fumi.test.png");
+            put(b, "public.png", &png);
+            put(b, "public.jpeg", b"jpeg");
+            let read = read_from(b);
+            assert_eq!(read.image.map(|i| (i.0, i.1)), Some((png.clone(), "png")));
+            assert!(!read.has_files);
+
+            // Text alongside means the picture is of that text.
+            let b = board("fumi.test.text");
+            put(b, "public.png", &png);
+            put(b, "public.utf8-plain-text", b"words");
+            assert!(read_from(b).image.is_none());
+
+            let b = board("fumi.test.gif");
+            put(b, "com.compuserve.gif", b"GIF89a");
+            assert_eq!(read_from(b).image.unwrap().1, "gif");
+
+            // File URLs go first, images among them or not.
+            let b = board("fumi.test.files");
+            put(b, "public.file-url", b"file:///tmp/a.png");
+            put(b, "public.png", &png);
+            let read = read_from(b);
+            assert!(read.has_files && read.image.is_none());
+            assert_eq!(read.files, [PathBuf::from("/tmp/a.png")]);
+
+            for name in ["fumi.test.png", "fumi.test.text", "fumi.test.gif", "fumi.test.files"] {
+                let _: () = unsafe { msg_send![named_pasteboard(name), releaseGlobally] };
+            }
+        });
+    }
+
+    #[core::prelude::v1::test]
+    fn tiff_comes_out_as_png() {
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        // Written by AppKit, since the image crate here has no TIFF.
+        with_pool(|| unsafe {
+            let png = {
+                let mut p = std::io::Cursor::new(Vec::new());
+                image::RgbaImage::new(4, 4).write_to(&mut p, image::ImageFormat::Png).unwrap();
+                p.into_inner()
+            };
+            let data: id = msg_send![class!(NSData), dataWithBytes: png.as_ptr() length: png.len()];
+            let rep: id = msg_send![class!(NSBitmapImageRep), imageRepWithData: data];
+            let tiff: id = msg_send![rep, TIFFRepresentation];
+            let length: usize = msg_send![tiff, length];
+            let ptr: *const u8 = msg_send![tiff, bytes];
+            std::io::Write::write_all(&mut bytes, std::slice::from_raw_parts(ptr, length)).unwrap();
+            let b = board("fumi.test.tiff");
+            put(b, "public.tiff", bytes.get_ref());
+            let (out, ext) = read_from(b).image.unwrap();
+            assert_eq!(ext, "png");
+            assert_eq!(&out[1..4], b"PNG");
+            let _: () = msg_send![named_pasteboard("fumi.test.tiff"), releaseGlobally];
+        });
+    }
 
     #[core::prelude::v1::test]
     fn each_embed_gets_its_own_line() {
