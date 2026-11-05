@@ -203,6 +203,9 @@ pub struct Editor {
     pub symbols: Rc<RefCell<SymbolCache>>,
     hovered_link: Option<(usize, Range<usize>)>,
     pub pane_width: Option<Pixels>,
+    /// The list's viewport as of this frame's start. Items are laid out while
+    /// the list holds its own state, so they can't ask it.
+    viewport_cache: Bounds<Pixels>,
     pub column_setting: String,
     /// `fumi.spellCheck` and `fumi.smartPunctuation`, as of the last settings change.
     spell_check: bool,
@@ -350,6 +353,7 @@ impl Editor {
             symbols: Rc::new(RefCell::new(SymbolCache::default())),
             hovered_link: None,
             pane_width: None,
+            viewport_cache: Bounds::default(),
             column_setting: fumi_ui::settings::editor_width(),
             spell_check: fumi_ui::settings::spell_check(),
             smart_punctuation: fumi_ui::settings::smart_punctuation(),
@@ -1867,7 +1871,7 @@ impl Editor {
             let keep_at = self
                 .keep_now
                 .filter(|(kept, _)| *kept == line)
-                .map(|(_, y)| (y, self.list.viewport_bounds()));
+                .map(|(_, y)| (y, self.viewport_cache));
             let slash = self.slash.as_ref().and_then(|menu| {
                 (menu.anchor >= start && menu.anchor <= start + src_len)
                     .then(|| (display.src_to_disp(menu.anchor - start), self.slash_box.clone()))
@@ -1977,6 +1981,7 @@ impl Focusable for Editor {
 
 impl Render for Editor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.viewport_cache = self.list.viewport_bounds();
         metrics::frame_begin();
         if std::mem::take(&mut self.media_dirty) {
             self.settle_media(window);
