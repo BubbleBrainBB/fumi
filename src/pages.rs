@@ -297,9 +297,11 @@ impl PageHost {
             Ok(saved) => {
                 page.editor.update(cx, |e, _| e.dirty = false);
                 if let Some(written) = saved.written {
-                    page.base = written.clone();
-                    if written != text {
-                        page.editor.update(cx, |e, cx| e.replace_from_outside(&written, cx));
+                    // Not while an input method is composing: the file keeps the
+                    // merge, and the next save merges again from the old base.
+                    let taken = written == text || page.editor.update(cx, |e, cx| e.replace_from_outside(&written, cx));
+                    if taken {
+                        page.base = written;
                     }
                 }
                 if let Some(copy) = saved.conflict_copy {

@@ -161,7 +161,8 @@ impl RichLayout {
                     color: *color,
                     kern_after: px(0.),
                     box_size: None,
-                    box_mode: BoxMode::Centered,
+                    box_mode: BoxMode::Baseline,
+                    unbroken: None,
                 })
                 .collect();
             let mut laid = Laid::shape(line, &runs, |_| px(0.), width, true, |_, _| px(0.), window);

@@ -109,6 +109,9 @@ impl Default for Typography {
 }
 
 const CJK_FALLBACK: &str = "PingFang SC";
+/// `NSFont.monospacedSystemFont`'s family. CoreText finds it by this name, the way
+/// it finds New York by `.AppleSystemUIFontSerif`, and font-kit asks by family.
+pub const SYSTEM_MONO: &str = ".AppleSystemUIFontMonospaced";
 
 pub fn family_font(family: &str) -> Font {
     let name: String = match family {
@@ -124,9 +127,18 @@ pub fn family_font(family: &str) -> Font {
 }
 
 pub fn mono_font() -> Font {
-    let mut f = font("Menlo");
+    let mut f = font(SYSTEM_MONO);
     f.fallbacks = Some(FontFallbacks::from_fonts(vec![CJK_FALLBACK.into()]));
     f
+}
+
+/// `NSFont.isFixedPitch`: the system's monospace, or a family that is one.
+pub fn is_fixed_pitch(font: &Font) -> bool {
+    match font.family.as_ref() {
+        SYSTEM_MONO => true,
+        ".SystemUIFont" | ".AppleSystemUIFontSerif" => false,
+        family => crate::fonts::is_fixed_pitch(family),
+    }
 }
 
 pub fn ui_font() -> Font {
@@ -200,6 +212,8 @@ pub enum Link {
 pub struct Underline {
     pub color: Hsla,
     pub dashed: bool,
+    /// How far under the baseline it's drawn.
+    pub below: f32,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -224,6 +238,9 @@ pub struct Span {
     pub math: Option<InlineMath>,
     /// An image or video standing in the line.
     pub media: Option<std::rc::Rc<InlineMedia>>,
+    /// Link text that isn't in the source: one box, one row, cut short at the
+    /// column, one point wider than its text. `WikiLinkAttachment`.
+    pub unbroken: bool,
 }
 
 #[derive(Clone)]
@@ -231,8 +248,9 @@ pub struct InlineMath {
     pub latex: String,
     /// Written `$$…$$` in the middle of a line: display size, on the line.
     pub display: bool,
-    /// Typeset and filled in by the editor; `None` shows the source's box empty.
-    pub rendered: Option<std::rc::Rc<ratex_gpui::render::Rendered>>,
+    /// Typeset and filled in by the editor. What can't be typeset never gets
+    /// here: its source stays on the line as text.
+    pub rendered: Option<std::rc::Rc<crate::blocks::Formula>>,
 }
 
 /// A stretch of visible text and the source bytes behind it. A hidden marker
@@ -285,6 +303,8 @@ pub struct DisplayLine {
     pub wrap: bool,
     /// Something on this line may change height once it has loaded.
     pub media_pending: bool,
+    /// Misspelled words, in visible bytes. Filled in by the editor.
+    pub misspelled: Vec<Range<usize>>,
 }
 
 impl DisplayLine {
@@ -360,6 +380,8 @@ const RAW_MONO: u32 = 1 << 18;
 const PILL_END: u32 = 1 << 19;
 const PILL_BEFORE: u32 = 1 << 20;
 const NO_INLINE: u32 = 1 << 21;
+/// Syntax on the caret's line: at the body's size whatever the line's.
+const BODY_SIZE: u32 = 1 << 22;
 
 struct Styled<'a> {
     src: &'a str,
@@ -418,7 +440,10 @@ regex!(code_re, r"`([^`]+)`");
 regex!(keyword_re, r"\b(func|let|var|if|else|for|while|return|guard|import|class|struct|enum|protocol|extension|def|function|const|true|false|nil|null|None|True|False|self|this|in|case|switch|break|continue|try|catch|throw|throws|async|await|public|private|static|new|from|as|interface|type|extends|implements|package|go|fn|pub|mut|impl|use|where|yield|lambda|with|and|or|not|elif|end|do|then|fi|echo|export|select|insert|update|delete|create|table|into|values)\b");
 regex!(number_re, r"\b\d+(?:\.\d+)?\b");
 regex!(string_re, r#""(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'"#);
-regex!(slash_comment_re, r"//[^\n]*");
+/// `//[^\n]*|/\*[\s\S]*?\*/`, a line at a time: the bare `/*` is one that doesn't
+/// close on its own line.
+regex!(slash_comment_re, r"//[^\n]*|/\*.*?\*/|/\*");
+regex!(block_comment_re, r"(?s)//[^\n]*|/\*.*?\*/");
 regex!(hash_comment_re, r"(?:^|\s)#[^\n]*");
 
 /// `(?<!\*)\*(?!\s)([^*]+?)(?<!\s)\*(?!\*)`
@@ -947,11 +972,13 @@ fn inline_pass(
             if skip(&full) {
                 continue;
             }
-            if active(&full) {
+            let latex_text = s[inner].trim();
+            // On the caret, or what can't be typeset: its source, as text.
+            if active(&full) || !crate::blocks::can_typeset(latex_text) {
                 st.set(at + full.start..at + full.end, RAW_MONO);
             } else {
                 st.set(at + full.start..at + full.end, MATH);
-                latex.push((at + full.start..at + full.end, s[inner].trim().to_string(), is_display));
+                latex.push((at + full.start..at + full.end, latex_text.to_string(), is_display));
             }
         }
     }
@@ -965,9 +992,93 @@ fn prev_char_len(s: &str, at: usize) -> usize {
     s[..at].chars().next_back().map_or(0, char::len_utf8)
 }
 
-/// Four quiet colors only: keywords, strings, numbers, comments. A line at a
-/// time, so a `/* … */` spanning lines is colored on its own first line only.
-fn highlight_code(st: &mut Styled, language: &str) {
+const HASH_COMMENT_LANGUAGES: [&str; 15] = [
+    "python", "py", "sh", "bash", "zsh", "shell", "yaml", "yml", "ruby", "rb", "toml", "r", "perl", "makefile",
+    "dockerfile",
+];
+
+fn has_hash_comments(language: &str) -> bool {
+    HASH_COMMENT_LANGUAGES.contains(&language.to_lowercase().as_str())
+}
+
+/// For each line of a code block's body, whether it starts inside a `/* … */`.
+/// One that never closes isn't a comment, as the Swift pattern has it.
+pub fn comment_carries(body: &str, language: &str) -> Vec<bool> {
+    let lines = body.bytes().filter(|b| *b == b'\n').count() + 1;
+    let mut carries = vec![false; lines];
+    if has_hash_comments(language) || !body.contains("/*") {
+        return carries;
+    }
+    let mut line = 0;
+    let mut at = 0;
+    for m in block_comment_re().find_iter(body) {
+        line += body[at..m.start()].bytes().filter(|b| *b == b'\n').count();
+        let spans = m.as_str().bytes().filter(|b| *b == b'\n').count();
+        for carry in &mut carries[line + 1..line + 1 + spans] {
+            *carry = true;
+        }
+        line += spans;
+        at = m.end();
+    }
+    carries
+}
+
+/// `LineCtx::comment_carry` for line `at` of a note, a code block's body line:
+/// the body around it is read through `kind` and `text`, by line number.
+pub fn comment_carry_at<T: AsRef<str>>(
+    at: usize,
+    count: usize,
+    language: &str,
+    kind: impl Fn(usize) -> Kind,
+    text: impl Fn(usize) -> T,
+) -> (bool, bool) {
+    let open = (0..at).rev().find(|l| kind(*l) == Kind::FenceOpen).unwrap_or(0);
+    let mut end = at;
+    while end + 1 < count && kind(end + 1) == Kind::FenceBody {
+        end += 1;
+    }
+    let body: Vec<T> = (open + 1..=end).map(&text).collect();
+    if !body.iter().any(|l| l.as_ref().contains("/*")) {
+        return (false, false);
+    }
+    let joined = body.iter().map(AsRef::as_ref).collect::<Vec<&str>>().join("\n");
+    let carries = comment_carries(&joined, language);
+    let i = at - open - 1;
+    (carries.get(i).copied().unwrap_or(false), carries.get(i + 1).copied().unwrap_or(false))
+}
+
+/// What's comment on one line of a block that isn't a hash-comment language,
+/// given whether it starts inside a `/* … */` and whether one runs on past it.
+fn slash_comments(s: &str, carry_in: bool, carry_out: bool) -> Vec<Range<usize>> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    if carry_in {
+        match s.find("*/") {
+            Some(close) => {
+                out.push(0..close + 2);
+                at = close + 2;
+            }
+            None => return vec![0..s.len()],
+        }
+    }
+    while let Some(m) = slash_comment_re().find_at(s, at) {
+        if m.as_str() == "/*" {
+            if carry_out {
+                out.push(m.start()..s.len());
+                break;
+            }
+            // Never closes: not a comment, and what follows it may still be.
+            at = m.start() + 1;
+            continue;
+        }
+        out.push(m.range());
+        at = m.end();
+    }
+    out
+}
+
+/// Four quiet colors only: keywords, strings, numbers, comments.
+fn highlight_code(st: &mut Styled, language: &str, carry: (bool, bool)) {
     let s = st.src;
     for m in keyword_re().find_iter(s) {
         st.set(m.range(), SYN_KEYWORD);
@@ -980,15 +1091,16 @@ fn highlight_code(st: &mut Styled, language: &str) {
         st.clear(m.range(), SYN_KEYWORD | SYN_NUMBER);
         st.set(m.range(), SYN_STRING);
     }
-    let hash = matches!(
-        language.to_lowercase().as_str(),
-        "python" | "py" | "sh" | "bash" | "zsh" | "shell" | "yaml" | "yml" | "ruby" | "rb" | "toml"
-            | "r" | "perl" | "makefile" | "dockerfile"
-    );
-    let comment = if hash { hash_comment_re() } else { slash_comment_re() };
-    if let Some(m) = comment.find(s) {
-        st.clear(m.range(), SYN_KEYWORD | SYN_NUMBER | SYN_STRING);
-        st.set(m.range(), FAINT);
+    if has_hash_comments(language) {
+        if let Some(m) = hash_comment_re().find(s) {
+            st.clear(m.range(), SYN_KEYWORD | SYN_NUMBER | SYN_STRING);
+            st.set(m.range(), FAINT);
+        }
+        return;
+    }
+    for range in slash_comments(s, carry.0, carry.1) {
+        st.clear(range.clone(), SYN_KEYWORD | SYN_NUMBER | SYN_STRING);
+        st.set(range, FAINT);
     }
 }
 
@@ -1014,21 +1126,12 @@ pub struct LineCtx<'a> {
     pub media: Option<&'a dyn MediaLookup>,
     /// Whether the caret on this line opens the media it touches.
     pub reveal_media: bool,
-}
-
-fn is_spaced_block(kind: Kind) -> bool {
-    matches!(
-        kind,
-        Kind::FenceOpen
-            | Kind::FenceBody
-            | Kind::FenceClose
-            | Kind::CalloutOpen
-            | Kind::CalloutBody
-            | Kind::CalloutClose
-            | Kind::QuoteCalloutTitle
-            | Kind::QuoteCalloutBody
-            | Kind::EmojiQuote
-    )
+    /// Nothing before or after this line: a box here has no neighbour to space.
+    pub first: bool,
+    pub last: bool,
+    /// For a code line: whether it starts inside a `/* … */`, and whether one
+    /// runs on past its end.
+    pub comment_carry: (bool, bool),
 }
 
 /// `paragraphSpacing` a line of this kind has on its own, for block spacing.
@@ -1216,7 +1319,7 @@ pub fn build_line(src: &str, cx: &LineCtx) -> DisplayLine {
             indent = QUOTE_INDENT * depth as f32;
             quote_depth = depth;
             if caret_here {
-                st.set(0..prefix, MARKER);
+                st.set(0..prefix, MARKER | BODY_SIZE);
                 hang = prefix;
             } else {
                 st.set(0..prefix, HIDDEN);
@@ -1235,7 +1338,6 @@ pub fn build_line(src: &str, cx: &LineCtx) -> DisplayLine {
             base.color = kind.color(c.dark);
             indent = CALLOUT_TEXT_INDENT;
             tail = CALLOUT_TAIL;
-            top = (BLOCK_SPACING - own_after(cx.prev, typo, false).min(BLOCK_SPACING)) + BLOCK_PADDING - BLOCK_PADDING;
             boxed = Some(callout_box(cx.block_type, true, cx.next != Kind::QuoteCalloutBody));
             callout_icon = Some((cx.block_type.to_string(), kind.color(c.dark)));
             if let Some((end, word)) = callout_header(src) {
@@ -1274,9 +1376,10 @@ pub fn build_line(src: &str, cx: &LineCtx) -> DisplayLine {
             base.color = kind.color(c.dark);
             indent = CALLOUT_TEXT_INDENT;
             tail = CALLOUT_TAIL;
+            // The icon whether the block ever closes or not; the box only if it does.
+            callout_icon = Some((cx.block_type.to_string(), kind.color(c.dark)));
             if cx.real {
                 boxed = Some(callout_box(cx.block_type, true, false));
-                callout_icon = Some((cx.block_type.to_string(), kind.color(c.dark)));
             }
             let marker = callout_open_marker(src);
             if caret_here {
@@ -1332,7 +1435,7 @@ pub fn build_line(src: &str, cx: &LineCtx) -> DisplayLine {
                 code_language = Some((cx.block_type.to_string().into(), BLOCK_PADDING - 7. + 6. + 0.));
             }
             match cx.kind {
-                Kind::FenceBody => highlight_code(&mut st, cx.block_type),
+                Kind::FenceBody => highlight_code(&mut st, cx.block_type, cx.comment_carry),
                 _ => {
                     st.marker(0..src.len(), caret_here);
                     if !caret_here {
@@ -1382,21 +1485,14 @@ pub fn build_line(src: &str, cx: &LineCtx) -> DisplayLine {
     }
 
     // Block spacing: 14 between a box and what's around it, by raising the
-    // neighbours' own paragraph spacing. The box's padding reaches into it.
-    if is_spaced_block(cx.kind) && !is_spaced_block(cx.prev) && cx.prev != Kind::Blank && boxed.is_some_and(|b| b.first) {
-        // Handled below with the box insets.
-    }
-    let opens_box = boxed.is_some_and(|b| b.first);
-    let closes_box = boxed.is_some_and(|b| b.last);
-    if opens_box {
+    // neighbours' own paragraph spacing, so it's added here once, on the box's
+    // side. The box's padding reaches into it. At the note's ends there's no
+    // neighbour to raise.
+    if boxed.is_some_and(|b| b.first) && !cx.first {
         top += (BLOCK_SPACING - own_after(cx.prev, typo, false)).max(0.);
-    } else if !boxed.is_some() && is_block_end(cx.prev) {
-        top = top.max(BLOCK_SPACING);
     }
-    if closes_box {
+    if boxed.is_some_and(|b| b.last) && !cx.last {
         bottom += (BLOCK_SPACING - own_before(cx.next, typo)).max(0.);
-    } else if !boxed.is_some() && is_block_start(cx.next) {
-        bottom = bottom.max(0.);
     }
 
     if inline {
@@ -1473,15 +1569,8 @@ pub fn build_line(src: &str, cx: &LineCtx) -> DisplayLine {
         centered: false,
         wrap,
         media_pending: media.pending,
+        misspelled: Vec::new(),
     }
-}
-
-fn is_block_end(kind: Kind) -> bool {
-    matches!(kind, Kind::FenceClose | Kind::CalloutClose) 
-}
-
-fn is_block_start(kind: Kind) -> bool {
-    matches!(kind, Kind::FenceOpen | Kind::CalloutOpen | Kind::QuoteCalloutTitle)
 }
 
 pub fn ui_semibold() -> Font {
@@ -1531,7 +1620,7 @@ fn underline_marked(spans: Vec<Span>, marked: Range<usize>, color: Hsla) -> Vec<
                     piece.kern_after = px(0.);
                 }
                 if w[0] >= marked.start && w[1] <= marked.end {
-                    piece.underline = Some(Underline { color, dashed: false });
+                    piece.underline = Some(Underline { color, dashed: false, below: 2. });
                 }
                 out.push(piece);
             }
@@ -1554,6 +1643,9 @@ struct Assembler<'a> {
     links: Vec<(Range<usize>, Link)>,
     /// The last character that could take a face, for punctuation to go by.
     prev_composite: Option<char>,
+    /// The last character the Han/Latin gap goes by, and the span it ended up in.
+    /// Monospaced runs are skipped over: it carries across them.
+    gap_prev: Option<(Script, usize)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1619,6 +1711,7 @@ impl Assembler<'_> {
             map: Vec::with_capacity(8),
             links: Vec::new(),
             prev_composite: None,
+            gap_prev: None,
         }
     }
 
@@ -1654,6 +1747,7 @@ impl Assembler<'_> {
             underline = Some(Underline {
                 color: if flags & LINK != 0 { c.link_underline } else { c.text },
                 dashed: false,
+                below: 2.,
             });
             if flags & LINK != 0 {
                 color = c.text;
@@ -1661,7 +1755,7 @@ impl Assembler<'_> {
         }
         if flags & MISSING != 0 {
             color = c.text3;
-            underline = Some(Underline { color: c.link_underline, dashed: true });
+            underline = Some(Underline { color: c.link_underline, dashed: true, below: 2. });
         }
         if flags & MARK != 0 {
             fill = Some(Fill { color: c.highlight, pad: 0., inset: 1., radius: 3. });
@@ -1700,6 +1794,9 @@ impl Assembler<'_> {
         if flags & MARKER != 0 {
             color = c.marker;
         }
+        if flags & BODY_SIZE != 0 {
+            size = typo.size;
+        }
         if flags & KIND_FADED != 0 {
             color = color.opacity(0.4);
         }
@@ -1714,6 +1811,7 @@ impl Assembler<'_> {
             kern_after: px(0.),
             math: None,
             media: None,
+            unbroken: false,
         }
     }
 
@@ -1732,14 +1830,18 @@ impl Assembler<'_> {
         }
         let src = self.src;
         let span = self.span_for(flags);
-        let fixed_pitch = span.font.family.as_ref() == "Menlo";
+        let fixed_pitch = is_fixed_pitch(&span.font);
+        if fixed_pitch {
+            // Neither a gap nor a face here, and what's before it still counts.
+            self.push_piece(range, &span, false, flags);
+            return;
+        }
         let boundary_gap = (self.typo.size * 0.22).round();
         // Cut at script boundaries: the composite face, and the gap where Han
         // meets Latin, both act per stretch.
         let text = &src[range.clone()];
         let mut start = 0;
-        let mut prev: Option<(char, Script)> = self.last_visible();
-        let composite = self.typo.composite.as_ref().filter(|_| !fixed_pitch);
+        let composite = self.typo.composite.as_ref();
         let mut piece_cjk = None::<bool>;
         for (i, ch) in text.char_indices() {
             let script = script_of(ch);
@@ -1751,10 +1853,9 @@ impl Assembler<'_> {
             if composite.is_some() {
                 self.prev_composite = Some(ch);
             }
-            let gap = !fixed_pitch
-                && prev.is_some_and(|(_, s)| {
-                    (s == Script::Han && script == Script::Latin) || (s == Script::Latin && script == Script::Han)
-                });
+            let gap = self.gap_prev.is_some_and(|(s, _)| {
+                (s == Script::Han && script == Script::Latin) || (s == Script::Latin && script == Script::Han)
+            });
             let switch = piece_cjk.is_some_and(|p| p != cjk);
             if gap || switch {
                 if i > start {
@@ -1762,25 +1863,23 @@ impl Assembler<'_> {
                     start = i;
                 }
                 if gap {
-                    self.add_kern(px(boundary_gap));
+                    // On that character, which may be back before a monospaced run.
+                    let at = self.gap_prev.expect("a gap has a character before it").1;
+                    self.spans[at].kern_after += px(boundary_gap);
                 }
             }
             piece_cjk = Some(cjk);
-            prev = Some((ch, script));
+            // Where it lands is known once its piece goes in.
+            self.gap_prev = Some((script, self.spans.len()));
         }
         if start < text.len() {
             self.push_piece(range.start + start..range.end, &span, piece_cjk == Some(true), flags);
         }
     }
 
-    fn last_visible(&self) -> Option<(char, Script)> {
-        self.text.chars().next_back().map(|c| (c, script_of(c)))
-    }
-
-    fn add_kern(&mut self, kern: Pixels) {
-        if let Some(last) = self.spans.last_mut() {
-            last.kern_after += kern;
-        }
+    /// An object or atom: not a letter of either script.
+    fn break_gap(&mut self) {
+        self.gap_prev = Some((Script::Other, self.spans.len()));
     }
 
     fn push_piece(&mut self, range: Range<usize>, span: &Span, cjk: bool, flags: u32) {
@@ -1811,13 +1910,15 @@ impl Assembler<'_> {
     }
 
     fn push_atom(&mut self, range: Range<usize>, text: &str, flags: u32, link: Option<Link>, math: Option<(String, bool)>) {
+        self.break_gap();
         let disp = self.text.len();
         self.text.push_str(text);
         let mut span = self.span_for(flags & !HIDDEN);
         span.range = disp..disp + text.len();
         span.math = math.map(|(latex, display)| InlineMath { latex, display, rendered: None });
         if let Some(link) = link {
-            span.underline = Some(Underline { color: self.c.link_underline, dashed: false });
+            span.underline = Some(Underline { color: self.c.link_underline, dashed: false, below: 3. });
+            span.unbroken = true;
             self.links.push((disp..disp + text.len(), link));
         }
         self.map.push(MapSeg { disp, src: range.start, disp_len: text.len(), src_len: range.len() });
@@ -1827,6 +1928,7 @@ impl Assembler<'_> {
     /// An object standing for an image: for all of its source, or, behind the
     /// source when that shows, for none of it.
     fn push_media(&mut self, atom: &MediaAtom) {
+        self.break_gap();
         let disp = self.text.len();
         self.text.push(OBJECT);
         let mut span = self.span_for(0);
@@ -1904,24 +2006,142 @@ impl Assembler<'_> {
 
 // Cells ----------------------------------------------------------------------
 
-/// A table cell's inline Markdown, as the body renders it, markers gone.
+const CELL_CODE: u8 = 1 << 0;
+const CELL_LINK: u8 = 1 << 1;
+const CELL_BOLD: u8 = 1 << 2;
+const CELL_ITALIC: u8 = 1 << 3;
+const CELL_STRIKE: u8 = 1 << 4;
+
+regex!(cell_code_re, r"`([^`\n]+)`");
+regex!(cell_link_re, r"\[([^\]\n]+)\]\(([^)\s]+)\)");
+regex!(cell_bold_re, r"\*\*(\S(?:.*?\S)?)\*\*|__(\S(?:.*?\S)?)__");
+regex!(cell_strike_re, r"~~(\S(?:.*?\S)?)~~");
+
+/// `(?<![*\w])\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?![*\w])`, and the same for `_`.
+fn cell_italics(s: &str) -> Vec<(Range<usize>, Range<usize>)> {
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = Vec::new();
+    let mut i = 0;
+    'scan: while i < s.len() {
+        let Some(d) = s[i..].chars().next() else { break };
+        let open = i + d.len_utf8();
+        if !matches!(d, '*' | '_') {
+            i = open;
+            continue;
+        }
+        let before = s[..i].chars().next_back();
+        let first = s[open..].chars().next();
+        let opens = before.is_none_or(|c| c != d && !word(c)) && first.is_some_and(|c| c != d && !c.is_whitespace());
+        if opens {
+            let from = open + first.map_or(0, char::len_utf8);
+            for (k, c) in s[from..].char_indices() {
+                if c != d {
+                    continue;
+                }
+                let close = from + k;
+                let last = s[..close].chars().next_back().unwrap_or(' ');
+                let after = s[close + 1..].chars().next();
+                if last != d && !last.is_whitespace() && after.is_none_or(|c| c != d && !word(c)) {
+                    out.push((i..close + 1, open..close));
+                    i = close + 1;
+                    continue 'scan;
+                }
+            }
+        }
+        i = open;
+    }
+    out
+}
+
+/// A cell's text as it's shown, and each visible byte's styling. Each rule runs
+/// over what the last left, taking its markers out; one that reaches into inline
+/// code is left as it is. `TableCellText.attributed`, which isn't the body's pass.
+pub fn cell_markup(src: &str) -> (String, Vec<u8>) {
+    let mut text = src.to_string();
+    let mut flags = vec![0u8; text.len()];
+    let rule = |text: &mut String, flags: &mut Vec<u8>, matches: Vec<(Range<usize>, Range<usize>)>, flag: u8| {
+        for (full, inner) in matches.into_iter().rev() {
+            if flag != CELL_CODE && flags[full.clone()].iter().any(|f| f & CELL_CODE != 0) {
+                continue;
+            }
+            for f in &mut flags[inner.clone()] {
+                *f |= flag;
+            }
+            flags.drain(inner.end..full.end);
+            flags.drain(full.start..inner.start);
+            text.replace_range(inner.end..full.end, "");
+            text.replace_range(full.start..inner.start, "");
+        }
+    };
+    let by_regex = |re: &Regex, s: &str| -> Vec<(Range<usize>, Range<usize>)> {
+        re.captures_iter(s)
+            .filter_map(|m| {
+                let inner = m.iter().skip(1).flatten().next()?.range();
+                Some((m.get(0)?.range(), inner))
+            })
+            .collect()
+    };
+    let m = by_regex(cell_code_re(), &text);
+    rule(&mut text, &mut flags, m, CELL_CODE);
+    let m = by_regex(cell_link_re(), &text);
+    rule(&mut text, &mut flags, m, CELL_LINK);
+    let m = by_regex(cell_bold_re(), &text);
+    rule(&mut text, &mut flags, m, CELL_BOLD);
+    let m = cell_italics(&text);
+    rule(&mut text, &mut flags, m, CELL_ITALIC);
+    let m = by_regex(cell_strike_re(), &text);
+    rule(&mut text, &mut flags, m, CELL_STRIKE);
+    (text, flags)
+}
+
+/// A table cell's inline Markdown, markers gone. A numeric column's body cells
+/// have tabular digits, `monospacedDigitSystemFont`.
 pub fn cell_spans(src: &str, header: bool, numeric: bool, typo: &Typography) -> (SharedString, Vec<Span>) {
     let c = t();
     let mut base_font = ui_font();
     if header {
         base_font.weight = FontWeight::SEMIBOLD;
+    } else if numeric {
+        base_font.features = FontFeatures(std::sync::Arc::new(vec![("tnum".to_string(), 1)]));
     }
-    let base = Base { font: base_font, size: typo.small, color: if header { c.text2 } else { c.text } };
-    let mut st = Styled { src, flags: vec![0; src.len()] };
-    let mut links = Vec::new();
-    let mut atoms = Vec::new();
-    let mut latex = Vec::new();
-    let mut media = MediaPass::default();
-    inline_pass(&mut st, 0..src.len(), None, false, None, &mut links, &mut atoms, &mut latex, &mut media);
-    let _ = numeric;
-    let mut b = Assembler::new(src, &c, typo, &base, Kind::Para);
-    b.run(&st, &atoms, &latex, None, &[]);
-    (b.text.into(), b.spans)
+    let base_color = if header { c.text2 } else { c.text };
+    let (text, flags) = cell_markup(src);
+    let mut spans: Vec<Span> = Vec::new();
+    let mut at = 0;
+    while at < text.len() {
+        let f = flags[at];
+        let end = flags[at..].iter().position(|x| *x != f).map_or(text.len(), |n| at + n);
+        let mut font = base_font.clone();
+        let mut size = typo.small;
+        let mut color = base_color;
+        if f & CELL_CODE != 0 {
+            font = mono_font();
+            size = small_size(typo.small);
+            color = c.inline_code;
+        }
+        if f & CELL_BOLD != 0 {
+            font.weight = FontWeight::BOLD;
+            color = c.strong;
+        }
+        if f & CELL_ITALIC != 0 {
+            font.style = FontStyle::Italic;
+        }
+        spans.push(Span {
+            range: at..end,
+            font,
+            size: px(size),
+            color,
+            underline: (f & CELL_LINK != 0).then_some(Underline { color: c.link_underline, dashed: false, below: 2. }),
+            strike: (f & CELL_STRIKE != 0).then_some(color),
+            fill: (f & CELL_CODE != 0).then_some(Fill { color: c.inline_bg, pad: PILL_PADDING, inset: -1., radius: 4. }),
+            kern_after: px(0.),
+            math: None,
+            media: None,
+            unbroken: false,
+        });
+        at = end;
+    }
+    (text.into(), spans)
 }
 
 #[cfg(test)]
@@ -1947,6 +2167,9 @@ mod tests {
                 real: true,
                 raw_block: false,
                 prev_has_caret: false,
+                first: false,
+                last: false,
+                comment_carry: (false, false),
             },
         )
     }
@@ -2065,6 +2288,128 @@ mod tests {
         assert_eq!(gaps, (16f32 * 0.22).round() * 2.);
     }
 
+    fn block_line(src: &str, kind: Kind, prev: Kind, next: Kind, ends: (bool, bool), real: bool) -> DisplayLine {
+        let typo = Typography::default();
+        build_line(
+            src,
+            &LineCtx {
+                kind,
+                caret: None,
+                title: false,
+                marked: None,
+                prev,
+                next,
+                media: None,
+                reveal_media: true,
+                block_type: "note",
+                typo: &typo,
+                links: None,
+                real,
+                raw_block: false,
+                prev_has_caret: false,
+                first: ends.0,
+                last: ends.1,
+                comment_carry: (false, false),
+            },
+        )
+    }
+
+    #[core::prelude::v1::test]
+    fn a_box_is_spaced_once_and_not_at_the_notes_ends() {
+        let open = |first| block_line("```", Kind::FenceOpen, Kind::Para, Kind::FenceBody, (first, false), true);
+        assert_eq!(open(false).top - open(true).top, px(BLOCK_SPACING));
+        let close = |last| block_line("```", Kind::FenceClose, Kind::FenceBody, Kind::Para, (false, last), true);
+        assert_eq!(close(false).bottom - close(true).bottom, px(BLOCK_SPACING));
+        // What follows the box adds nothing of its own: the 14 is the box's.
+        let after_box = block_line("text", Kind::Para, Kind::FenceClose, Kind::Para, (false, false), true);
+        let after_text = block_line("text", Kind::Para, Kind::Para, Kind::Para, (false, false), true);
+        assert_eq!(after_box.top, after_text.top);
+        let after_callout = block_line("text", Kind::Para, Kind::CalloutClose, Kind::Para, (false, false), true);
+        assert_eq!(after_callout.top, after_text.top);
+    }
+
+    #[core::prelude::v1::test]
+    fn an_unclosed_callout_keeps_its_icon_without_a_box() {
+        let d = block_line("::: tip", Kind::CalloutOpen, Kind::Blank, Kind::CalloutBody, (true, false), false);
+        assert!(d.callout_icon.is_some());
+        assert!(d.boxed.is_none());
+    }
+
+    #[core::prelude::v1::test]
+    fn a_shown_quote_marker_is_body_size_on_an_attribution() {
+        let typo = Typography::default();
+        let d = line("> — Someone", Kind::Quote, true);
+        let marker = d.spans.iter().find(|s| s.range.start == 0).unwrap();
+        assert_eq!(marker.size, px(typo.size));
+        assert!(d.spans.iter().any(|s| s.size == px(typo.small)), "the attribution stays small");
+    }
+
+    #[core::prelude::v1::test]
+    fn code_is_the_system_monospace() {
+        assert_eq!(mono_font().family.as_ref(), SYSTEM_MONO);
+        assert!(is_fixed_pitch(&mono_font()));
+        assert!(!is_fixed_pitch(&ui_font()));
+    }
+
+    #[core::prelude::v1::test]
+    fn the_han_latin_gap_carries_across_code() {
+        let gap = px((16f32 * 0.22).round());
+        let total = |d: &DisplayLine| d.spans.iter().map(|s| s.kern_after).fold(px(0.), |a, b| a + b);
+        let han_kern = |d: &DisplayLine| d.spans.iter().find(|s| d.text[s.range.clone()].contains('中')).unwrap().kern_after;
+        // Han, code, Latin: the code is skipped, so Han meets Latin, and the gap
+        // goes on the Han character, before the code. Han, code, Han: none.
+        let (latin, han) = (line("中`x`a", Kind::Para, false), line("中`x`文", Kind::Para, false));
+        assert_eq!(total(&latin) - total(&han), gap);
+        assert_eq!(han_kern(&latin) - han_kern(&han), gap);
+        // Latin, code, Han: the same the other way.
+        let (han_after, latin_after) = (line("a`x`文", Kind::Para, false), line("a`x`b", Kind::Para, false));
+        assert_eq!(total(&han_after) - total(&latin_after), gap);
+    }
+
+    #[core::prelude::v1::test]
+    fn block_comments_span_lines_only_when_they_close() {
+        assert_eq!(comment_carries("a /* b\nc\nd */ e\nf", "swift"), [false, true, true, false]);
+        // Never closed: not a comment at all.
+        assert_eq!(comment_carries("a /* b\nc", "swift"), [false, false]);
+        // Hash languages have no block comments.
+        assert_eq!(comment_carries("a /* b\nc */", "python"), [false, false]);
+        assert_eq!(slash_comments("x /* y */ z // w", false, false), [2..9, 12..16]);
+        assert_eq!(slash_comments("a */ b", true, false), [0..4]);
+        assert_eq!(slash_comments("a /* b", false, true), [2..6]);
+        assert_eq!(slash_comments("a /* b", false, false), Vec::<Range<usize>>::new());
+        assert_eq!(slash_comments("whole", true, true), [0..5]);
+    }
+
+    #[core::prelude::v1::test]
+    fn cells_have_their_own_markup() {
+        let (text, flags) = cell_markup("**b** __u__ _i_ *j* ~~s~~ `c` [l](u)");
+        assert_eq!(text, "b u i j s c l");
+        let flag_at = |ch: char| flags[text.find(ch).unwrap()];
+        assert_eq!(flag_at('b'), CELL_BOLD);
+        assert_eq!(flag_at('u'), CELL_BOLD);
+        assert_eq!(flag_at('i'), CELL_ITALIC);
+        assert_eq!(flag_at('j'), CELL_ITALIC);
+        assert_eq!(flag_at('s'), CELL_STRIKE);
+        assert_eq!(flag_at('c'), CELL_CODE);
+        assert_eq!(flag_at('l'), CELL_LINK);
+        // What the body styles, a cell leaves as it is.
+        let (text, flags) = cell_markup("#tag ==m== <u>x</u> [[w]] snake_case_name");
+        assert_eq!(text, "#tag ==m== <u>x</u> [[w]] snake_case_name");
+        assert!(flags.iter().all(|f| *f == 0));
+        // Nothing inside code is markup.
+        let (text, _) = cell_markup("`**x**`");
+        assert_eq!(text, "**x**");
+    }
+
+    #[core::prelude::v1::test]
+    fn a_numeric_column_has_tabular_digits() {
+        let typo = Typography::default();
+        let (_, spans) = cell_spans("1,234", false, true, &typo);
+        assert!(spans[0].font.features.tag_value_list().iter().any(|(tag, on)| tag == "tnum" && *on == 1));
+        let (_, spans) = cell_spans("1,234", true, true, &typo);
+        assert!(spans[0].font.features.tag_value_list().is_empty(), "not the header");
+    }
+
     #[core::prelude::v1::test]
     fn list_labels_and_levels() {
         assert_eq!(letter_label(1), "a");
@@ -2175,6 +2520,9 @@ mod tests {
                 real: false,
                 raw_block: false,
                 prev_has_caret: false,
+                first: false,
+                last: false,
+                comment_carry: (false, false),
                 media: None,
                 reveal_media: true,
             },
@@ -2254,6 +2602,9 @@ mod tests {
                 real: true,
                 raw_block: false,
                 prev_has_caret: false,
+                first: false,
+                last: false,
+                comment_carry: (false, false),
             },
         )
     }
@@ -2362,6 +2713,9 @@ mod tests {
                 real: true,
                 raw_block: false,
                 prev_has_caret: false,
+                first: false,
+                last: false,
+                comment_carry: (false, false),
             },
         );
         assert_eq!(d.text.as_ref(), "\u{FFFC}");

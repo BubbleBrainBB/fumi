@@ -109,26 +109,23 @@ pub fn callout_type(content: &str) -> Option<&str> {
     (after.is_empty() || after.starts_with(char::is_whitespace)).then_some(name)
 }
 
-/// True for a pictographic first character (⚠️, ✅, 💡 …), not for digits or
-/// `#`/`*`, which can be emoji but read as text.
+/// Whether the first character is an emoji, as Swift asks it of the first
+/// `Character`'s first scalar: `isEmojiPresentation`, or `isEmoji` above ASCII
+/// with more scalars after it (`©️`, `⚠️`). A digit or `#` that could be one
+/// reads as text, and so does a pictograph that's text by default (`🌡`).
 pub fn starts_with_emoji(text: &str) -> bool {
-    let mut chars = text.chars();
-    let Some(first) = chars.next() else { return false };
-    let c = first as u32;
-    let wide = matches!(c, 0x1F300..=0x1FAFF | 0x1F000..=0x1F2FF);
-    let needs_selector = matches!(c, 0x2190..=0x2BFF | 0x3030 | 0x303D | 0x3297 | 0x3299);
-    wide || (needs_selector && (chars.next() == Some('\u{FE0F}') || is_emoji_presentation(c)))
-}
-
-fn is_emoji_presentation(c: u32) -> bool {
-    matches!(
-        c,
-        0x231A | 0x231B | 0x23E9..=0x23EC | 0x23F0 | 0x23F3 | 0x25FD | 0x25FE | 0x2614 | 0x2615
-            | 0x2648..=0x2653 | 0x267F | 0x2693 | 0x26A1 | 0x26AA | 0x26AB | 0x26BD | 0x26BE
-            | 0x26C4 | 0x26C5 | 0x26CE | 0x26D4 | 0x26EA | 0x26F2 | 0x26F3 | 0x26F5 | 0x26FA
-            | 0x26FD | 0x2705 | 0x270A | 0x270B | 0x2728 | 0x274C | 0x274E | 0x2753..=0x2755
-            | 0x2757 | 0x2795..=0x2797 | 0x27B0 | 0x27BF | 0x2B1B | 0x2B1C | 0x2B50 | 0x2B55
-    )
+    use unicode_properties::{EmojiStatus, UnicodeEmoji};
+    use unicode_segmentation::UnicodeSegmentation;
+    let Some(first) = text.graphemes(true).next() else { return false };
+    let Some(c) = first.chars().next() else { return false };
+    let presentation = matches!(
+        c.emoji_status(),
+        EmojiStatus::EmojiPresentation
+            | EmojiStatus::EmojiPresentationAndModifierBase
+            | EmojiStatus::EmojiPresentationAndEmojiComponent
+            | EmojiStatus::EmojiPresentationAndModifierAndEmojiComponent
+    );
+    presentation || (c.is_emoji_char() && first.chars().count() > 1 && c as u32 > 0x7F)
 }
 
 /// Which `$$`, `:::` and fence lines pair into closed blocks. Fences pair the
@@ -508,6 +505,7 @@ mod tests {
         assert_eq!(c("> [!note] T", None), Kind::QuoteCalloutTitle);
         assert_eq!(c("> ⚠️ careful", None), Kind::EmojiQuote);
         assert_eq!(c("> 1 not emoji", None), Kind::Quote);
+        assert_eq!(c("> 1\u{FE0F}\u{20E3} keycap", None), Kind::Quote);
     }
 
     #[test]
@@ -603,5 +601,19 @@ mod tests {
         assert_eq!(display_math_marks("$$a$$"), 2);
         assert_eq!(display_math_marks("\\$$a"), 0);
         assert_eq!(display_math_marks("a"), 0);
+    }
+
+    #[core::prelude::v1::test]
+    fn emoji_first_as_swift_asks_it() {
+        assert!(starts_with_emoji("💡 idea"));
+        assert!(starts_with_emoji("⚠\u{FE0F} careful"));
+        assert!(starts_with_emoji("©\u{FE0F} owned"));
+        assert!(starts_with_emoji("🀄 tile"));
+        assert!(!starts_with_emoji("🌡 alone, text by default"));
+        assert!(!starts_with_emoji("🀁 a tile that's text"));
+        assert!(!starts_with_emoji("© plain"));
+        assert!(!starts_with_emoji("#\u{FE0F}\u{20E3}"));
+        assert!(!starts_with_emoji("文"));
+        assert!(!starts_with_emoji(""));
     }
 }

@@ -26,10 +26,11 @@ impl Shaped {
     /// From the row's top down to its baseline. With a fixed line height the
     /// extra room goes above the text, as TextKit puts it.
     pub fn baseline(&self, row: usize) -> Pixels {
+        let r = &self.laid.rows[row];
         if self.natural {
-            self.ascent.max(self.laid.rows[row].box_tall - self.descent)
+            self.ascent.max(r.box_tall - self.descent).max(r.math_above)
         } else {
-            self.laid.rows[row].height - self.descent
+            r.height - self.descent.max(r.math_depth)
         }
     }
 
@@ -85,13 +86,16 @@ pub fn shape(d: &DisplayLine, width: Pixels, window: &Window) -> Rc<Shaped> {
                 kern_after: s.kern_after,
                 box_size: media_box.or(s.math.as_ref().map(|m| match &m.rendered {
                     Some(r) => size(px(r.width), px(r.height)),
-                    None => size(px(8.), px(8.)),
+                    None => size(px(0.), px(0.)),
                 })),
                 box_mode: match &s.media {
                     Some(m) if m.fills_line => BoxMode::BaselineFill,
                     Some(_) => BoxMode::Baseline,
-                    None => BoxMode::Centered,
+                    None => BoxMode::Formula {
+                        depth: px(s.math.as_ref().and_then(|m| m.rendered.as_ref()).map_or(0., |r| r.depth)),
+                    },
                 },
+                unbroken: s.unbroken.then_some(wrap_width),
             }
         })
         .collect();
@@ -106,7 +110,7 @@ pub fn shape(d: &DisplayLine, width: Pixels, window: &Window) -> Rc<Shaped> {
         |run_x| if hang > 0 { hang_x(d, run_x) } else { px(0.) },
         wrap_width,
         d.wrap,
-        |_, tallest| if tallest > px(0.) { fixed.max(tallest + spacing) } else { fixed },
+        |_, boxes| boxes.height(fixed, spacing, descent),
         window,
     );
     Rc::new(Shaped { laid, ascent, descent, natural, column: wrap_width })
@@ -509,9 +513,8 @@ impl Element for LineEl {
             let base = top_y + row.y + shaped.baseline(row_ix);
             let x = text_x + laid.run_x[r] - row.x0;
             let h = px(rendered.height);
-            // Centered on the text's middle.
-            let y = (base - d.font_size * 0.33 - h / 2.).max(top_y + row.y);
-            let b = Bounds::new(point(x, y), size(px(rendered.width), h));
+            // Its baseline on the text's.
+            let b = Bounds::new(point(x, base + px(rendered.depth) - h), size(px(rendered.width), h));
             let _ = window.paint_image(
                 b,
                 b,
@@ -557,10 +560,11 @@ impl Element for LineEl {
                 }
                 let end_x = if e == span.range.end { laid.run_x[r + 1] - span.kern_after } else { laid.x_for_index(e) };
                 let x0 = text_x + laid.x_for_index(a) - row.x0;
-                let x1 = text_x + end_x - row.x0;
+                // A unit is a point wider than its line.
+                let x1 = text_x + end_x - row.x0 - if span.unbroken { px(1.) } else { px(0.) };
                 let base = top_y + row.y + shaped.baseline(i);
                 if let Some(u) = span.underline {
-                    let y = (base + px(2.)).round();
+                    let y = (base + px(u.below)).round();
                     // A link under the pointer darkens its line.
                     let over = self.hovered.as_ref().is_some_and(|h| h.start < span.range.end && span.range.start < h.end);
                     let color = if over { c.text.opacity(0.7) } else { u.color };
@@ -578,6 +582,24 @@ impl Element for LineEl {
                 if let Some(color) = span.strike {
                     let y = (base - x_height / 2.).round();
                     window.paint_quad(fill(Bounds::new(point(x0, y), size(x1 - x0, px(1.))), color));
+                }
+            }
+        }
+
+        // Misspelled words: red dots under them, as NSTextView marks them.
+        for range in &d.misspelled {
+            for (i, row) in laid.rows.iter().enumerate() {
+                let (a, e) = (range.start.max(row.start), range.end.min(row.end));
+                if a >= e {
+                    continue;
+                }
+                let base = top_y + row.y + shaped.baseline(i);
+                let mut x = text_x + laid.x_for_index(a) - row.x0;
+                let end = text_x + laid.x_for_index(e) - row.x0;
+                let dot = px(crate::spell::DOT);
+                while x + dot <= end {
+                    rounded(Bounds::new(point(x, (base + px(2.)).round()), size(dot, dot)), crate::spell::color(c.dark), crate::spell::DOT / 2., true, true, window);
+                    x += px(crate::spell::DOT_STEP);
                 }
             }
         }

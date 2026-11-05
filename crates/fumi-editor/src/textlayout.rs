@@ -28,6 +28,9 @@ pub struct Row {
     pub height: Pixels,
     /// The tallest box sitting on this row's baseline, with the line's descent.
     pub box_tall: Pixels,
+    /// Typeset math on this row: how far it reaches above and below the baseline.
+    pub math_above: Pixels,
+    pub math_depth: Pixels,
     /// The row starts with a box that takes the whole row: a revealed image.
     /// The source's end, which is this row's start, belongs to the row above.
     pub fill: bool,
@@ -36,8 +39,8 @@ pub struct Row {
 /// How an inline box sits in its row.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BoxMode {
-    /// Typeset math, centered on the text's middle.
-    Centered,
+    /// Typeset math, its baseline on the text's, this far above the box's foot.
+    Formula { depth: Pixels },
     /// An attachment, its bottom on the baseline.
     Baseline,
     /// The same, reserving the row for itself.
@@ -53,6 +56,29 @@ pub struct RunInput<'a> {
     /// An inline box (typeset math) stands for this run: no glyphs.
     pub box_size: Option<Size<Pixels>>,
     pub box_mode: BoxMode,
+    /// One unit no wrap goes inside, cut short past this width and one point wider
+    /// than its text. A `[[link]]` showing text that isn't in the source.
+    pub unbroken: Option<Pixels>,
+}
+
+/// What a row's height has to hold.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RowBoxes {
+    /// The tallest attachment, which brings its own room below the baseline.
+    pub tallest: Pixels,
+    /// Typeset math, above and below the baseline.
+    pub math_above: Pixels,
+    pub math_depth: Pixels,
+}
+
+impl RowBoxes {
+    /// A row of `fixed` height with the baseline `descent` above its foot: tall
+    /// enough for what stands above the baseline, with any more than the descent
+    /// added below, so the baseline stays where the row's text expects it.
+    pub fn height(self, fixed: Pixels, spacing: Pixels, descent: Pixels) -> Pixels {
+        let above = fixed.max(self.tallest + spacing).max(self.math_above + descent + spacing);
+        above + (self.math_depth - descent).max(px(0.))
+    }
 }
 
 pub struct Laid {
@@ -111,6 +137,12 @@ pub fn can_break_between(prev: char, next: char) -> bool {
 /// `boundaries` holds (byte index, x) for each glyph in order; `total` closes the
 /// last one. Returns the rows' start bytes after the first.
 pub fn wrap(text: &str, boundaries: &[(usize, f32)], total: f32, first_x: f32, width: f32) -> Vec<usize> {
+    wrap_around(text, boundaries, total, first_x, width, &[])
+}
+
+/// …with `units` kept whole, which a line may break on either side of, as TextKit
+/// treats an attachment. Their boundaries are only their first.
+pub fn wrap_around(text: &str, boundaries: &[(usize, f32)], total: f32, first_x: f32, width: f32, units: &[Range<usize>]) -> Vec<usize> {
     let mut starts = Vec::new();
     let mut row_x = first_x;
     let mut last_break: Option<(usize, f32)> = None;
@@ -120,7 +152,7 @@ pub fn wrap(text: &str, boundaries: &[(usize, f32)], total: f32, first_x: f32, w
         let c = text[index..].chars().next().unwrap_or(' ');
         if index > row_start {
             let prev = text[..index].chars().next_back().unwrap_or(' ');
-            if can_break_between(prev, c) {
+            if can_break_between(prev, c) || units.iter().any(|u| u.start == index || u.end == index) {
                 last_break = Some((index, x));
             }
         }
@@ -147,7 +179,7 @@ impl Laid {
         first_row_x: impl Fn(&[Pixels]) -> Pixels,
         width: Pixels,
         wrap_text: bool,
-        line_height: impl Fn(usize, Pixels) -> Pixels,
+        line_height: impl Fn(usize, RowBoxes) -> Pixels,
         window: &Window,
     ) -> Laid {
         let mut glyphs = Vec::with_capacity(text.len());
@@ -165,19 +197,29 @@ impl Laid {
                 continue;
             }
             if !run.text.is_empty() {
-                let layout = ts.layout_line(
-                    run.text,
-                    run.size,
-                    &[TextRun {
-                        len: run.text.len(),
-                        font: run.font.clone(),
-                        color: run.color,
-                        background_color: None,
-                        underline: None,
-                        strikethrough: None,
-                    }],
-                    None,
-                );
+                let text_run = TextRun {
+                    len: run.text.len(),
+                    font: run.font.clone(),
+                    color: run.color,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                };
+                let mut layout = ts.layout_line(run.text, run.size, std::slice::from_ref(&text_run), None);
+                let mut unit_width = None;
+                if let Some(limit) = run.unbroken {
+                    unit_width = Some((layout.width + px(1.)).min(limit));
+                    if layout.width + px(1.) > limit {
+                        let (shown, runs) = ts.line_wrapper(run.font.clone(), run.size).truncate_line(
+                            SharedString::from(run.text.to_string()),
+                            limit - px(1.),
+                            "…",
+                            std::slice::from_ref(&text_run),
+                            TruncateFrom::End,
+                        );
+                        layout = ts.layout_line(shown.as_ref(), run.size, &runs, None);
+                    }
+                }
                 for shaped in &layout.runs {
                     for g in &shaped.glyphs {
                         glyphs.push(Glyph {
@@ -186,12 +228,14 @@ impl Laid {
                             font: shaped.font_id,
                             size: run.size,
                             color: run.color,
-                            index: (at + g.index) as u32,
+                            // A cut-short run's last glyph is the ellipsis, past no
+                            // boundary of the real text.
+                            index: (at + g.index.min(run.text.len() - 1)) as u32,
                             emoji: g.is_emoji,
                         });
                     }
                 }
-                x += layout.width + run.kern_after;
+                x += unit_width.unwrap_or(layout.width) + run.kern_after;
             }
             at += run.text.len();
         }
@@ -204,6 +248,11 @@ impl Laid {
         for (r, run) in runs.iter().enumerate() {
             if run.box_size.is_some() {
                 boundaries.push((run_at[r], f32::from(run_x[r])));
+            } else if run.unbroken.is_some() {
+                boundaries.push((run_at[r], f32::from(run_x[r])));
+                while g < glyphs.len() && (glyphs[g].index as usize) < run_at[r + 1] {
+                    g += 1;
+                }
             } else {
                 while g < glyphs.len() && (glyphs[g].index as usize) < run_at[r + 1] {
                     boundaries.push((glyphs[g].index as usize, f32::from(glyphs[g].x)));
@@ -212,8 +261,14 @@ impl Laid {
             }
         }
         boundaries.retain(|b| f32::from(x0) <= b.1);
+        let units: Vec<Range<usize>> = runs
+            .iter()
+            .enumerate()
+            .filter(|(_, run)| run.unbroken.is_some())
+            .map(|(r, _)| run_at[r]..run_at[r + 1])
+            .collect();
         let starts = if wrap_text {
-            wrap(text, &boundaries, f32::from(x), f32::from(x0), f32::from(width))
+            wrap_around(text, &boundaries, f32::from(x), f32::from(x0), f32::from(width), &units)
         } else {
             Vec::new()
         };
@@ -224,21 +279,34 @@ impl Laid {
         let mut row_x = x0;
         let mut y = px(0.);
         for (i, end) in starts.iter().copied().chain([text.len()]).enumerate() {
-            let (mut tallest, mut box_tall, mut fill) = (px(0.), px(0.), false);
+            let (mut boxes, mut box_tall, mut fill) = (RowBoxes::default(), px(0.), false);
             for (r, run) in runs.iter().enumerate() {
                 let Some(size) = run.box_size else { continue };
                 let run_start = laid.run_at[r];
                 if run_start < start || run_start >= end.max(start + 1) {
                     continue;
                 }
-                tallest = tallest.max(size.height);
-                if run.box_mode != BoxMode::Centered {
+                if let BoxMode::Formula { depth } = run.box_mode {
+                    boxes.math_above = boxes.math_above.max(size.height - depth);
+                    boxes.math_depth = boxes.math_depth.max(depth);
+                } else {
+                    boxes.tallest = boxes.tallest.max(size.height);
                     box_tall = box_tall.max(size.height);
                 }
                 fill |= run.box_mode == BoxMode::BaselineFill && run_start == start && i > 0;
             }
-            let h = line_height(i, tallest);
-            laid.rows.push(Row { start, end, x0: row_x, y, height: h, box_tall, fill });
+            let h = line_height(i, boxes);
+            laid.rows.push(Row {
+                start,
+                end,
+                x0: row_x,
+                y,
+                height: h,
+                box_tall,
+                math_above: boxes.math_above,
+                math_depth: boxes.math_depth,
+                fill,
+            });
             y += h;
             if end < text.len() {
                 row_x = laid.x_for_index(end);
@@ -394,6 +462,29 @@ mod tests {
         let t = "abcdefghij";
         let starts = wrap(t, &bounds(t, 10.), 100., 0., 40.);
         assert_eq!(starts, [4, 8]);
+    }
+
+    #[core::prelude::v1::test]
+    fn a_unit_breaks_on_either_side_and_never_inside() {
+        // "aa bb" then a unit: it goes down whole, not back to the last space.
+        let t = "aa bbLINK c";
+        let boundaries = [(0, 0.), (1, 10.), (2, 20.), (3, 30.), (4, 40.), (5, 50.), (9, 90.), (10, 100.)];
+        assert_eq!(wrap_around(t, &boundaries, 110., 0., 70., &[5..9]), [5]);
+        // Too long for any row: it keeps a row to itself, uncut here.
+        let t = "a LINK";
+        assert_eq!(wrap_around(t, &[(0, 0.), (1, 10.), (2, 20.)], 500., 0., 100., &[2..6]), [2]);
+    }
+
+    #[core::prelude::v1::test]
+    fn a_formula_grows_its_row_only_as_far_as_it_has_to() {
+        let (fixed, descent, none) = (px(28.), px(4.), px(0.));
+        let row = |above: f32, depth: f32| RowBoxes { tallest: none, math_above: px(above), math_depth: px(depth) };
+        // Fits: the fixed height.
+        assert_eq!(row(12., 4.).height(fixed, none, descent), fixed);
+        // Taller above the baseline than the row has room for.
+        assert_eq!(row(30., 2.).height(fixed, none, descent), px(34.));
+        // Deeper than the descent: only that much more, below.
+        assert_eq!(row(12., 10.).height(fixed, none, descent), px(34.));
     }
 
     #[core::prelude::v1::test]

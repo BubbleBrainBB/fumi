@@ -16,6 +16,8 @@ pub mod popover;
 #[allow(deprecated, unexpected_cfgs)]
 pub mod paste;
 pub mod slash;
+#[allow(deprecated, unexpected_cfgs)]
+pub mod spell;
 pub mod textlayout;
 #[allow(deprecated, unexpected_cfgs)]
 pub mod video;

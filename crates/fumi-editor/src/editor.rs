@@ -5,7 +5,8 @@ use crate::blocks::{self, BlockCache};
 use fumi_core::markdown::{find_title, scan_all};
 use fumi_ui::native::SymbolCache;
 use fumi_ui::theme::t;
-use crate::display::*;
+use crate::display::{self, *};
+use crate::spell;
 use fumi_core::doc::Doc;
 use crate::element::*;
 use fumi_core::markdown::*;
@@ -203,6 +204,9 @@ pub struct Editor {
     hovered_link: Option<(usize, Range<usize>)>,
     pub pane_width: Option<Pixels>,
     pub column_setting: String,
+    /// `fumi.spellCheck` and `fumi.smartPunctuation`, as of the last settings change.
+    spell_check: bool,
+    smart_punctuation: bool,
     pending_link: Option<PendingLink>,
     was_focused: bool,
     /// Only the key window's focused editor draws a caret.
@@ -347,6 +351,8 @@ impl Editor {
             hovered_link: None,
             pane_width: None,
             column_setting: fumi_ui::settings::editor_width(),
+            spell_check: fumi_ui::settings::spell_check(),
+            smart_punctuation: fumi_ui::settings::smart_punctuation(),
             pending_link: None,
             was_focused: false,
             caret_shows: false,
@@ -861,47 +867,31 @@ impl Editor {
     }
 
     /// Replaces the text with what's on disk now, keeping the caret and the
-    /// scroll where they were as nearly as the change allows, with undo reset
-    /// at the seam. Only what differs is touched.
-    pub fn replace_from_outside(&mut self, text: &str, cx: &mut Context<Self>) {
+    /// scroll where they were as nearly as the change allows, as one undoable
+    /// edit. Only what differs is touched. Refused (false) while an input method
+    /// is composing, which a replacement would break.
+    pub fn replace_from_outside(&mut self, text: &str, cx: &mut Context<Self>) -> bool {
+        if self.marked.is_some() {
+            return false;
+        }
         let old = self.doc.rope.to_string();
-        if old == text {
+        let sel_before = (self.anchor, self.head);
+        let Some(op) = outside_op(&old, text, sel_before) else {
             self.dirty = false;
-            return;
-        }
-        let prefix = old.bytes().zip(text.bytes()).take_while(|(a, b)| a == b).count();
-        let mut prefix = prefix;
-        while !old.is_char_boundary(prefix) || !text.is_char_boundary(prefix) {
-            prefix -= 1;
-        }
-        let max_suffix = old.len().min(text.len()) - prefix;
-        let mut suffix = old.bytes().rev().zip(text.bytes().rev()).take(max_suffix).take_while(|(a, b)| a == b).count();
-        while !old.is_char_boundary(old.len() - suffix) || !text.is_char_boundary(text.len() - suffix) {
-            suffix -= 1;
-        }
-        let (old_end, new_end) = (old.len() - suffix, text.len() - suffix);
-        let map = |at: usize| {
-            if at <= prefix {
-                at
-            } else if at >= old_end {
-                at - old_end + new_end
-            } else {
-                new_end
-            }
+            return true;
         };
-        let (anchor, head) = (map(self.anchor), map(self.head));
         self.close_slash();
         // The caret's line stays where it is in the window.
         let keep = self.row_top_of(self.head);
-        self.apply(prefix, old_end - prefix, &text[prefix..new_end], (anchor, head));
+        self.apply(op.at, op.old.len(), &op.new, op.sel_after);
         if self.selection_is_empty() {
             self.keep_next = keep.map(|y| (self.doc.line_of(self.head), y));
         }
-        self.undo.clear();
-        self.redo.clear();
+        record_outside(&mut self.undo, &mut self.redo, op);
         self.dirty = false;
         self.refresh_outline(cx);
         cx.notify();
+        true
     }
 
     /// After Settings changed fonts, sizes or the theme: drops what baked the old
@@ -909,6 +899,8 @@ impl Editor {
     pub fn settings_changed(&mut self, typo: Typography, cx: &mut Context<Self>) {
         self.typo = typo;
         self.column_setting = fumi_ui::settings::editor_width();
+        self.spell_check = fumi_ui::settings::spell_check();
+        self.smart_punctuation = fumi_ui::settings::smart_punctuation();
         self.blocks.clear();
         let top = self.list.logical_scroll_top();
         self.list.reset_with_uniform_height(self.items.len(), px(ITEM_HINT));
@@ -1750,13 +1742,7 @@ impl Editor {
         let at = (0..=line).rev().find(|l| self.lines[*l].kind == open).unwrap_or(line);
         let text = self.doc.line_text(at);
         match open {
-            Kind::FenceOpen => text
-                .trim()
-                .trim_start_matches(['`', '~'])
-                .split(' ')
-                .next()
-                .unwrap_or("")
-                .to_string(),
+            Kind::FenceOpen => fence_language(&text).to_string(),
             Kind::CalloutOpen => text
                 .trim()
                 .trim_start_matches(':')
@@ -1811,10 +1797,33 @@ impl Editor {
                 prev_has_caret: line > 0 && self.caret_line == line - 1,
                 media: media.as_ref().map(|m| m as &dyn MediaLookup),
                 reveal_media: media.is_some() && (self.selection_is_empty() || self.doc.line_of(self.anchor) == line),
+                first: line == 0,
+                last: line + 1 == self.lines.len(),
+                comment_carry: if kind == Kind::FenceBody { self.comment_carry(line, &block_type) } else { (false, false) },
             },
         );
         d.margin = self.margin;
         d
+    }
+
+    /// For a line in a code block's body: whether it starts inside a `/* … */`,
+    /// and whether one runs on past its end.
+    fn comment_carry(&self, line: usize, language: &str) -> (bool, bool) {
+        display::comment_carry_at(line, self.lines.len(), language, |l| self.lines[l].kind, |l| self.doc.line_text(l))
+    }
+
+    /// Marks the line's misspelled words, if spell checking is on: in prose only,
+    /// not code, math, or what stands for something else.
+    fn fill_spelling(&self, d: &mut DisplayLine, kind: Kind, caret: Option<usize>) {
+        if !self.spell_check || matches!(kind, Kind::FenceBody | Kind::FenceOpen | Kind::FenceClose | Kind::MathBody | Kind::FrontBody) {
+            return;
+        }
+        let checkable = |r: &Range<usize>| {
+            d.spans.iter().filter(|s| s.range.start < r.end && r.start < s.range.end).all(|s| {
+                s.math.is_none() && s.media.is_none() && !s.unbroken && !display::is_fixed_pitch(&s.font)
+            })
+        };
+        d.misspelled = spell::without_typing(spell::misspelled(&d.text), caret).into_iter().filter(|r| checkable(r)).collect();
     }
 
     /// Typesets the line's inline math and hands the result to its spans.
@@ -1847,6 +1856,8 @@ impl Editor {
                 built.bottom += px(BOTTOM_PAD);
             }
             self.fill_math(&mut built, window);
+            let typing_at = (line == self.head_line && self.selection_is_empty()).then(|| built.src_to_disp(self.head - start));
+            self.fill_spelling(&mut built, self.lines[line].kind, typing_at);
             let display = Rc::new(built);
             let src_len = display.src_len;
             let head_here = line == self.head_line;
@@ -2079,7 +2090,7 @@ impl Render for Editor {
                     .font(ui_font())
                     .overflow_hidden()
                     .whitespace_nowrap()
-                    .text_ellipsis()
+                    .text_ellipsis_middle()
                     .child(address)
             }))
             .children(status.map(|text| {
@@ -2511,24 +2522,30 @@ impl Editor {
 }
 
 impl Editor {
-    /// The soft edge text scrolls under at the page's top. Blur isn't available
-    /// here, so this is the Swift band's wash alone; on Glass it would need the
-    /// page color, which Glass has none of, so there's no band.
+    /// The soft edge text scrolls under at the page's top: the Swift band's wash,
+    /// 80% of the page at the top, 30% at 40% down, clear from 75%. GPUI's
+    /// gradients take two stops, so it's two bands. Blur isn't available here,
+    /// and on Glass, which has no page color to wash with, there's no band.
     fn fade_band(&self) -> Option<Div> {
         let c = t();
         if c.glass {
             return None;
         }
-        let top = linear_color_stop(c.page_content.opacity(0.8), 0.);
-        let bottom = linear_color_stop(c.page_content.opacity(0.), 1.);
+        let wash = |from: f32, to: f32| {
+            linear_gradient(180., linear_color_stop(c.page_content.opacity(from), 0.), linear_color_stop(c.page_content.opacity(to), 1.))
+        };
+        let (first, second) = fade_band_stops(FADE_BAND);
         Some(
             div()
                 .absolute()
                 .top_0()
                 .left_0()
                 .right_0()
-                .h(px(30.))
-                .bg(linear_gradient(180., top, bottom)),
+                .h(px(FADE_BAND))
+                .flex()
+                .flex_col()
+                .child(div().w_full().h(px(first)).flex_none().bg(wash(0.8, 0.3)))
+                .child(div().w_full().h(px(second)).flex_none().bg(wash(0.3, 0.))),
         )
     }
 
@@ -2694,7 +2711,19 @@ impl EntityInputHandler for Editor {
         // one replacing a selection.
         let lone_slash = slash::is_lone_trigger(text) && (range.is_empty() || self.marked.as_ref() == Some(&range));
         let was_open = self.slash.is_some();
-        self.edit(range, text, !composing, composing);
+        // Smart quotes and dashes, as typed, not in what an input method commits.
+        let (range, text) = match self.smart_punctuation && !composing {
+            true => {
+                let line_start = self.doc.line_start(self.doc.line_of(range.start));
+                let before = self.doc.rope.byte_slice(line_start..range.start).to_string();
+                match fumi_ui::text_field::smart_substitution(&before, text) {
+                    Some((back, new)) => (range.start - back..range.end, std::borrow::Cow::Owned(new)),
+                    None => (range, std::borrow::Cow::Borrowed(text)),
+                }
+            }
+            false => (range, std::borrow::Cow::Borrowed(text)),
+        };
+        self.edit(range, &text, !composing, composing);
         // A committed composition is a finished unit for undo.
         if composing {
             self.can_coalesce = false;
@@ -2775,6 +2804,61 @@ impl EntityInputHandler for Editor {
 }
 
 // Whole-document passes -------------------------------------------------------
+
+const FADE_BAND: f32 = 30.;
+
+/// The heights of the band's two washes: to 40% down, then on to 75%.
+fn fade_band_stops(height: f32) -> (f32, f32) {
+    (height * 0.4, height * (0.75 - 0.4))
+}
+
+/// A fence's info string's first word: its language.
+fn fence_language(line: &str) -> &str {
+    line.trim().trim_start_matches(['`', '~']).split_whitespace().next().unwrap_or("")
+}
+
+/// The one step that takes `old` to `new`: only what differs, with the selection
+/// carried across it. `None` when they're the same.
+fn outside_op(old: &str, new: &str, sel_before: (usize, usize)) -> Option<Op> {
+    if old == new {
+        return None;
+    }
+    let mut prefix = old.bytes().zip(new.bytes()).take_while(|(a, b)| a == b).count();
+    while !old.is_char_boundary(prefix) || !new.is_char_boundary(prefix) {
+        prefix -= 1;
+    }
+    let max_suffix = old.len().min(new.len()) - prefix;
+    let mut suffix = old.bytes().rev().zip(new.bytes().rev()).take(max_suffix).take_while(|(a, b)| a == b).count();
+    while !old.is_char_boundary(old.len() - suffix) || !new.is_char_boundary(new.len() - suffix) {
+        suffix -= 1;
+    }
+    let (old_end, new_end) = (old.len() - suffix, new.len() - suffix);
+    let map = |at: usize| {
+        if at <= prefix {
+            at
+        } else if at >= old_end {
+            at - old_end + new_end
+        } else {
+            new_end
+        }
+    };
+    Some(Op {
+        at: prefix,
+        old: old[prefix..old_end].to_string(),
+        new: new[prefix..new_end].to_string(),
+        sel_before,
+        sel_after: (map(sel_before.0), map(sel_before.1)),
+        typing: false,
+    })
+}
+
+/// A change from outside goes on the undo stack like any edit: what's under it
+/// stays, and, as with `NSUndoManager`, what was undone can't be redone over it,
+/// since a redo's offsets don't hold in the new text.
+fn record_outside(undo: &mut Vec<Op>, redo: &mut Vec<Op>, op: Op) {
+    undo.push(op);
+    redo.clear();
+}
 
 /// Where two item lists over the same lines differ: old index ranges and how
 /// many items replace each, in order.
@@ -2933,6 +3017,65 @@ mod tests {
         let math: Vec<&Item> = items.iter().filter(|i| i.kind == ItemKind::Math).collect();
         assert_eq!(math.len(), 1);
         assert_eq!((math[0].start, math[0].len), (2, 3));
+    }
+
+    fn undo_step(text: &mut String, undo: &mut Vec<Op>, redo: &mut Vec<Op>) -> (usize, usize) {
+        let op = undo.pop().unwrap();
+        text.replace_range(op.at..op.at + op.new.len(), &op.old);
+        let sel = op.sel_before;
+        redo.push(op);
+        sel
+    }
+
+    #[core::prelude::v1::test]
+    fn an_outside_change_is_one_undoable_step_over_the_history_before_it() {
+        let mut text = "one\ntwo\n".to_string();
+        let (mut undo, mut redo) = (Vec::new(), Vec::new());
+        // Typed here first.
+        let typed = outside_op(&text, "one\ntwo!\n", (7, 7)).unwrap();
+        text = "one\ntwo!\n".to_string();
+        undo.push(typed);
+        // Something undone, waiting to be redone, when the change comes in.
+        redo.push(outside_op("x", "y", (0, 0)).unwrap());
+
+        let outside = "zero\none\ntwo!\nthree\n";
+        let op = outside_op(&text, outside, (8, 8)).unwrap();
+        // The caret stays on its text.
+        assert_eq!(&outside[op.sel_after.0..op.sel_after.0 + 1], "\n");
+        text.replace_range(op.at..op.at + op.old.len(), &op.new);
+        assert_eq!(text, outside);
+        record_outside(&mut undo, &mut redo, op);
+        assert_eq!(undo.len(), 2, "earlier history is kept");
+        assert!(redo.is_empty(), "stale offsets must not be redone");
+
+        // Takes the change back whole, selection included, then the typing.
+        assert_eq!(undo_step(&mut text, &mut undo, &mut redo), (8, 8));
+        assert_eq!(text, "one\ntwo!\n");
+        undo_step(&mut text, &mut undo, &mut redo);
+        assert_eq!(text, "one\ntwo\n");
+    }
+
+    #[core::prelude::v1::test]
+    fn the_top_band_washes_in_two_stretches() {
+        assert_eq!(fade_band_stops(30.), (12., 10.5));
+    }
+
+    #[core::prelude::v1::test]
+    fn the_language_is_the_info_strings_first_word() {
+        assert_eq!(fence_language("``` swift"), "swift");
+        assert_eq!(fence_language("~~~rust title"), "rust");
+        assert_eq!(fence_language("```\tpy"), "py");
+        assert_eq!(fence_language("```"), "");
+    }
+
+    #[core::prelude::v1::test]
+    fn a_merge_after_a_save_keeps_multibyte_edges_whole() {
+        // A save's merge reaches the editor by the same step.
+        let op = outside_op("写了字", "写了些字", (9, 9)).unwrap();
+        assert_eq!((op.at, op.old.as_str(), op.new.as_str()), (6, "", "些"));
+        assert_eq!(op.sel_after, (12, 12));
+        assert!(!op.typing, "typing after it starts a step of its own");
+        assert!(outside_op("same", "same", (0, 0)).is_none());
     }
 
     #[core::prelude::v1::test]

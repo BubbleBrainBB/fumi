@@ -4,7 +4,8 @@
 use cocoa::base::{id, nil};
 use fumi_ui::native::ns;
 use objc::{class, msg_send, sel, sel_impl};
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::ffi::CStr;
 use std::sync::OnceLock;
 
@@ -34,6 +35,31 @@ pub fn is_available(family: &str) -> bool {
     matches!(family, "" | "System" | "SF Mono" | "New York") || is_installed(family)
 }
 
+/// Whether a family's regular face is monospaced. Asked for each run drawn, so
+/// remembered.
+pub fn is_fixed_pitch(family: &str) -> bool {
+    thread_local! {
+        static KNOWN: RefCell<HashMap<String, bool>> = RefCell::default();
+    }
+    KNOWN.with(|known| {
+        if let Some(fixed) = known.borrow().get(family) {
+            return *fixed;
+        }
+        let fixed = unsafe {
+            let manager: id = msg_send![class!(NSFontManager), sharedFontManager];
+            let font: id = msg_send![manager, fontWithFamily: ns(family) traits: 0usize weight: 5isize size: 12f64];
+            if font == nil {
+                false
+            } else {
+                let fixed: objc::runtime::BOOL = msg_send![font, isFixedPitch];
+                fixed == objc::runtime::YES
+            }
+        };
+        known.borrow_mut().insert(family.to_string(), fixed);
+        fixed
+    })
+}
+
 /// Whether the family has 一 of its own, the probe for covering Han.
 pub fn covers_han(family: &str) -> bool {
     unsafe {
@@ -54,6 +80,13 @@ pub fn covers_han(family: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[core::prelude::v1::test]
+    fn knows_a_monospaced_family() {
+        assert!(is_fixed_pitch("Menlo"));
+        assert!(!is_fixed_pitch("Georgia"));
+        assert!(!is_fixed_pitch("No Such Family"));
+    }
 
     #[core::prelude::v1::test]
     fn knows_a_cjk_family_from_a_latin_one() {

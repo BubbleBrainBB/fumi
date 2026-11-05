@@ -9,15 +9,16 @@ use fumi_core::markdown::*;
 use fumi_ui::theme::{t, text_size};
 use gpui::prelude::*;
 use gpui::*;
-use ratex_gpui::render::{Rendered, render_latex};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::Rc;
+use std::sync::Arc;
 
 #[derive(Default)]
 pub struct BlockCache {
     tables: HashMap<u64, Rc<TableModel>>,
-    math: HashMap<u64, Option<Rc<Rendered>>>,
+    math: HashMap<u64, Option<Rc<Formula>>>,
 }
 
 impl BlockCache {
@@ -54,6 +55,9 @@ pub struct TableModel {
 struct Cell {
     text: SharedString,
     spans: Vec<Span>,
+    /// The cell's own font, whatever its spans do, for the height of its lines.
+    base: Rc<Font>,
+    size: Pixels,
 }
 
 const BORDER: f32 = 1.;
@@ -86,10 +90,26 @@ fn shape_cell(cell: &Cell, width: Pixels, window: &Window) -> Laid {
             color: s.color,
             kern_after: s.kern_after,
             box_size: None,
-            box_mode: BoxMode::Centered,
+            box_mode: BoxMode::Baseline,
+            unbroken: None,
         })
         .collect();
-    Laid::shape(text, &runs, |_| px(0.), width, true, |_, _| px(19.), window)
+    let (_, height) = cell_line(cell.base.as_ref(), cell.size, window);
+    Laid::shape(text, &runs, |_| px(0.), width, true, |_, _| height, window)
+}
+
+/// A cell's baseline and line height: the font's own, as TextKit's `usedRect`
+/// measures it, whole points.
+fn cell_line(font: &Font, font_size: Pixels, window: &Window) -> (Pixels, Pixels) {
+    let ts = window.text_system();
+    let id = ts.resolve_font(font);
+    let (ascent, descent) = natural_line(f32::from(ts.ascent(id, font_size)), f32::from(ts.descent(id, font_size)));
+    (px(ascent), px(ascent + descent))
+}
+
+/// Ascent and descent rounded up to whole points.
+pub fn natural_line(ascent: f32, descent: f32) -> (f32, f32) {
+    (ascent.ceil(), descent.abs().ceil())
 }
 
 /// Text widths for the columns: as wide as their content when it all fits;
@@ -159,7 +179,11 @@ fn table_model(src: &str, available: f32, typo: &Typography, window: &Window) ->
             (0..cols)
                 .map(|c| {
                     let (text, spans) = cell_spans(cells.get(c).copied().unwrap_or(""), r == 0, numeric[c], typo);
-                    Cell { text, spans }
+                    let mut base = ui_font();
+                    if r == 0 {
+                        base.weight = FontWeight::SEMIBOLD;
+                    }
+                    Cell { text, spans, base: Rc::new(base), size: px(typo.small) }
                 })
                 .collect::<Vec<_>>(),
         );
@@ -219,9 +243,7 @@ pub fn table(
                 .w(px(width + PAD_H * 2.))
                 .flex_none()
                 .px(px(PAD_H))
-                .py(px(PAD_V))
-                .text_size(px(typo.small))
-                .line_height(px(19.));
+                .py(px(PAD_V));
             if col > 0 {
                 cell = cell.border_l_1().border_color(c.table_border);
             }
@@ -229,32 +251,8 @@ pub fn table(
                 Align::Left if model.numeric[col] => Align::Right,
                 a => a,
             };
-            cell = match align {
-                Align::Right => cell.flex().justify_end(),
-                Align::Center => cell.flex().justify_center(),
-                Align::Left => cell,
-            };
-            if let Some(content) = row.get(col) {
-                let runs: Vec<TextRun> = content
-                    .spans
-                    .iter()
-                    .map(|s| TextRun {
-                        len: s.range.len(),
-                        font: s.font.clone(),
-                        color: s.color,
-                        background_color: s.fill.map(|f| f.color),
-                        underline: s.underline.map(|u| UnderlineStyle {
-                            thickness: px(1.),
-                            color: Some(u.color),
-                            wavy: false,
-                        }),
-                        strikethrough: s.strike.map(|color| StrikethroughStyle {
-                            thickness: px(1.),
-                            color: Some(color),
-                        }),
-                    })
-                    .collect();
-                cell = cell.child(StyledText::new(content.text.clone()).with_runs(runs));
+            if row.get(col).is_some() {
+                cell = cell.child(CellEl { model: model.clone(), row: r, col, align });
             }
             line = line.child(cell);
         }
@@ -263,7 +261,222 @@ pub fn table(
     div().w_full().pt(px(8.)).pb(px(10.)).child(grid).into_any_element()
 }
 
+/// One cell's text, in its column: wrapped at its width, aligned in it, inline
+/// code on a rounded fill. `CellLayout`.
+struct CellEl {
+    model: Rc<TableModel>,
+    row: usize,
+    col: usize,
+    align: Align,
+}
+
+impl IntoElement for CellEl {
+    type Element = Self;
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl Element for CellEl {
+    type RequestLayoutState = Rc<RefCell<Option<(Pixels, Rc<Laid>)>>>;
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        _: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut style = Style::default();
+        style.size.width = relative(1.).into();
+        let slot: Self::RequestLayoutState = Rc::default();
+        let (model, row, col) = (self.model.clone(), self.row, self.col);
+        let filled = slot.clone();
+        let id = window.request_measured_layout(style, move |known, avail, window, _| {
+            let width = known.width.unwrap_or(match avail.width {
+                AvailableSpace::Definite(w) => w,
+                _ => px(model.widths[col]),
+            });
+            let laid = Rc::new(shape_cell(&model.rows[row][col], width.max(px(1.)), window));
+            let height = laid.height;
+            *filled.borrow_mut() = Some((width, laid));
+            size(width, height)
+        });
+        (id, slot)
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut Self::RequestLayoutState,
+        _: &mut Window,
+        _: &mut App,
+    ) {
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        slot: &mut Self::RequestLayoutState,
+        _: &mut (),
+        window: &mut Window,
+        _: &mut App,
+    ) {
+        let cell = &self.model.rows[self.row][self.col];
+        let cached = slot.borrow().clone();
+        let laid = match cached {
+            Some((w, laid)) if w == bounds.size.width => laid,
+            _ => Rc::new(shape_cell(cell, bounds.size.width.max(px(1.)), window)),
+        };
+        let (baseline, _) = cell_line(cell.base.as_ref(), cell.size, window);
+        let ts = window.text_system().clone();
+        for row in &laid.rows {
+            let row_width = laid.x_for_index(row.end) - row.x0;
+            let free = (bounds.size.width - row_width).max(px(0.));
+            let shift = match self.align {
+                Align::Left => px(0.),
+                Align::Center => free / 2.,
+                Align::Right => free,
+            };
+            let left = bounds.left() + shift - row.x0;
+            let top = bounds.top() + row.y;
+            let base = top + baseline;
+            for span in &cell.spans {
+                let (a, e) = (span.range.start.max(row.start), span.range.end.min(row.end));
+                if a >= e {
+                    continue;
+                }
+                let (x0, x1) = (left + laid.x_for_index(a), left + laid.x_for_index(e));
+                if let Some(pill) = span.fill {
+                    window.paint_quad(PaintQuad {
+                        bounds: Bounds::from_corners(
+                            point(x0 - px(pill.pad), top - px(pill.inset)),
+                            point(x1 + px(pill.pad), top + row.height + px(pill.inset)),
+                        ),
+                        corner_radii: Corners::all(px(pill.radius)),
+                        background: pill.color.into(),
+                        border_widths: Edges::default(),
+                        border_color: transparent_black(),
+                        border_style: BorderStyle::default(),
+                    });
+                }
+            }
+            for g in laid.glyphs_in(row.start..row.end) {
+                let at = point(left + g.x, base);
+                if g.emoji {
+                    let _ = window.paint_emoji(at, g.font, g.id, g.size);
+                } else {
+                    let _ = window.paint_glyph(at, g.font, g.id, g.size, g.color);
+                }
+            }
+            for span in &cell.spans {
+                let (a, e) = (span.range.start.max(row.start), span.range.end.min(row.end));
+                if a >= e || (span.underline.is_none() && span.strike.is_none()) {
+                    continue;
+                }
+                let (x0, x1) = (left + laid.x_for_index(a), left + laid.x_for_index(e));
+                if let Some(u) = span.underline {
+                    let y = (base + px(u.below)).round();
+                    window.paint_quad(fill(Bounds::new(point(x0, y), size(x1 - x0, px(1.))), u.color));
+                }
+                if let Some(color) = span.strike {
+                    let x_height = ts.x_height(ts.resolve_font(&span.font), span.size);
+                    let y = (base - x_height / 2.).round();
+                    window.paint_quad(fill(Bounds::new(point(x0, y), size(x1 - x0, px(1.))), color));
+                }
+            }
+        }
+    }
+}
+
 // Math -----------------------------------------------------------------------
+
+/// Around a formula, as `MathRenderer.render` leaves it.
+pub const FORMULA_PAD: f32 = 2.;
+
+/// A typeset formula: RaTeX's pixels and how they sit on the text's baseline.
+pub struct Formula {
+    pub image: Arc<RenderImage>,
+    pub width: f32,
+    pub height: f32,
+    /// From the baseline down to the image's foot, padding included.
+    pub depth: f32,
+}
+
+fn display_list(latex: &str) -> Option<ratex_types::DisplayList> {
+    let nodes = ratex_parser::parse(latex).ok()?;
+    let lbox = ratex_layout::layout(&nodes, &ratex_layout::LayoutOptions::default());
+    Some(ratex_layout::to_display_list(&lbox))
+}
+
+/// Whether RaTeX can set this. Asked for each formula on each line drawn, so
+/// remembered: the answer depends on nothing but the text.
+pub fn can_typeset(latex: &str) -> bool {
+    thread_local! {
+        static KNOWN: RefCell<HashMap<u64, bool>> = RefCell::default();
+    }
+    let k = key(latex);
+    if let Some(known) = KNOWN.with(|m| m.borrow().get(&k).copied()) {
+        return known;
+    }
+    let fits = |n: f64| n.is_finite() && n >= 0.;
+    let ok = display_list(latex).is_some_and(|l| fits(l.width) && fits(l.height + l.depth));
+    KNOWN.with(|m| m.borrow_mut().insert(k, ok));
+    ok
+}
+
+/// Typesets a formula at `size` with only `FORMULA_PAD` around it, its glyphs in
+/// `color` on nothing. `None` if RaTeX can't.
+pub fn typeset(latex: &str, font_size: f32, dpr: f32, color: Hsla) -> Option<Formula> {
+    let list = display_list(latex)?;
+    let options = ratex_render::RenderOptions {
+        font_size,
+        padding: FORMULA_PAD,
+        device_pixel_ratio: dpr,
+        ..Default::default()
+    };
+    let png = ratex_render::render_to_png(&list, &options).ok()?;
+    let rgba = image::load_from_memory(&png).ok()?.into_rgba8();
+    let (w, h) = rgba.dimensions();
+    let mut bytes = rgba.into_raw();
+    // RaTeX rasters black on white: a pixel's darkness becomes the glyph's alpha,
+    // over the text color, straight BGRA as a RenderImage holds it.
+    let c: Rgba = color.into();
+    let (r, g, b) = ((c.r * 255.).round() as u8, (c.g * 255.).round() as u8, (c.b * 255.).round() as u8);
+    for px in bytes.chunks_exact_mut(4) {
+        let a = 255 - px[0];
+        px[0] = b;
+        px[1] = g;
+        px[2] = r;
+        px[3] = a;
+    }
+    let buffer = image::RgbaImage::from_raw(w, h, bytes)?;
+    let height = h as f32 / dpr;
+    Some(Formula {
+        image: Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])),
+        width: w as f32 / dpr,
+        height,
+        depth: formula_depth(height, list.height as f32, font_size),
+    })
+}
+
+/// What's below the baseline: RaTeX puts it `padding + ascent × size` from the top.
+fn formula_depth(image_height: f32, ascent_em: f32, font_size: f32) -> f32 {
+    image_height - FORMULA_PAD - ascent_em * font_size
+}
 
 pub fn latex_of(src: &str) -> &str {
     let t = src.trim();
@@ -272,12 +485,12 @@ pub fn latex_of(src: &str) -> &str {
     t.trim()
 }
 
-pub fn inline_math(latex: &str, size: f32, cache: &mut BlockCache, window: &Window) -> Option<Rc<Rendered>> {
+pub fn inline_math(latex: &str, size: f32, cache: &mut BlockCache, window: &Window) -> Option<Rc<Formula>> {
     let dpr = window.scale_factor();
     cache
         .math
-        .entry(key(&format!("I{size}|{latex}")))
-        .or_insert_with(|| render_latex(latex, size, dpr, t().text).map(Rc::new))
+        .entry(key(&format!("I{size}|{dpr}|{latex}")))
+        .or_insert_with(|| typeset(latex, size, dpr, t().text).map(Rc::new))
         .clone()
 }
 
@@ -293,8 +506,8 @@ pub fn math(
     let size = typo.size + 2.;
     let rendered = cache
         .math
-        .entry(key(&format!("D{size}|{src}")))
-        .or_insert_with(|| render_latex(latex_of(src), size, dpr, c.text).map(Rc::new))
+        .entry(key(&format!("D{size}|{dpr}|{src}")))
+        .or_insert_with(|| typeset(latex_of(src), size, dpr, c.text).map(Rc::new))
         .clone();
     match rendered {
         Some(r) => {
@@ -344,11 +557,38 @@ fn pill_colors(index: usize, dark: bool) -> (Hsla, Hsla) {
     (hex(bg), hex(fg))
 }
 
+fn pill_text_width(text: &str, window: &Window) -> f32 {
+    let run = TextRun {
+        len: text.len(),
+        font: ui_font(),
+        color: t().text,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let shaped = window.text_system().shape_line(SharedString::from(text.to_string()), px(text_size::BODY), &[run], None);
+    f32::from(shaped.width).ceil()
+}
+
+/// How many pills fit on the row from `start`: one that would run past the edge
+/// stops the row, with room for its 6 pt each side and 4 between.
+pub fn pills_that_fit(text_widths: &[f32], start: f32, available: f32) -> usize {
+    let mut x = start;
+    for (i, width) in text_widths.iter().enumerate() {
+        let right = x + width + 12.;
+        if right > available {
+            return i;
+        }
+        x = right + 4.;
+    }
+    text_widths.len()
+}
+
 pub fn frontmatter(
     src: &str,
     available: Pixels,
     _typo: &Typography,
-    _window: &mut Window,
+    window: &mut Window,
     _cx: &mut App,
 ) -> AnyElement {
     let c = t();
@@ -382,8 +622,10 @@ pub fn frontmatter(
                 .text_ellipsis()
                 .text_color(c.text)
                 .child(text.clone()),
-            Value::List(items) => div().flex_1().min_w_0().flex().gap(px(4.)).overflow_hidden().children(
-                items.iter().enumerate().map(|(j, item)| {
+            Value::List(items) => div().flex_1().min_w_0().flex().gap(px(4.)).children({
+                let widths: Vec<f32> = items.iter().map(|item| pill_text_width(item, window)).collect();
+                let shown = pills_that_fit(&widths, KEY_COLUMN, f32::from(available));
+                items.iter().take(shown).enumerate().map(|(j, item)| {
                     let (bg, fg) = pill_colors(j, c.dark);
                     div()
                         .flex_none()
@@ -395,8 +637,8 @@ pub fn frontmatter(
                         .bg(bg)
                         .text_color(fg)
                         .child(item.clone())
-                }),
-            ),
+                })
+            }),
         };
         panel = panel.child(row().child(key).child(value));
     }
@@ -413,6 +655,49 @@ mod tests {
         assert_eq!(column_widths(&[10., 20.], &[5., 5.], 100.), [10., 20.]);
         let w = column_widths(&[100., 100.], &[40., 40.], 120.);
         assert_eq!(w.iter().sum::<f32>(), 120.);
+    }
+
+    #[core::prelude::v1::test]
+    fn a_pill_that_would_overflow_stops_the_row() {
+        assert_eq!(pills_that_fit(&[20., 20.], 96., 200.), 2);
+        // 96 + 32 = 128, +4; then 132 + 32 = 164, +4; the third ends at 200.
+        assert_eq!(pills_that_fit(&[20., 20., 20.], 96., 200.), 3);
+        assert_eq!(pills_that_fit(&[20., 20., 21.], 96., 200.), 2);
+        assert_eq!(pills_that_fit(&[500.], 96., 200.), 0);
+        assert_eq!(pills_that_fit(&[], 96., 200.), 0);
+    }
+
+    #[core::prelude::v1::test]
+    fn what_cant_be_typeset_is_known_before_it_is_drawn() {
+        assert!(can_typeset(r"\frac{1}{2}"));
+        assert!(can_typeset("x^2"));
+        assert!(!can_typeset(r"\nosuchcommand"));
+        assert!(!can_typeset(r"\frac{1"));
+        assert!(typeset(r"\nosuchcommand", 16., 2., black()).is_none());
+    }
+
+    #[core::prelude::v1::test]
+    fn a_formula_keeps_2pt_around_it_and_knows_its_baseline() {
+        let x = typeset("x", 16., 2., black()).unwrap();
+        let list = display_list("x").unwrap();
+        // Exactly the 2 pt padding around the ink's box, whole device pixels up.
+        assert!((x.width - (list.width as f32 * 16. + FORMULA_PAD * 2.)).abs() <= 0.5, "{}", x.width);
+        assert!((x.height - ((list.height + list.depth) as f32 * 16. + FORMULA_PAD * 2.)).abs() <= 0.5, "{}", x.height);
+        // Nothing below the baseline but the padding.
+        assert!((x.depth - (list.depth as f32 * 16. + FORMULA_PAD)).abs() <= 0.5, "{}", x.depth);
+        // A subscript reaches further down.
+        let sub = typeset("x_{i}", 16., 2., black()).unwrap();
+        assert!(sub.depth > x.depth);
+        // A fraction stands on the math axis, well below the baseline.
+        let frac = typeset(r"\frac{a}{b}", 16., 2., black()).unwrap();
+        assert!(frac.depth > sub.depth);
+        assert_eq!(formula_depth(20., 0.5, 16.), 10.);
+    }
+
+    #[core::prelude::v1::test]
+    fn cell_lines_are_whole_points() {
+        assert_eq!(natural_line(13.3, -3.4), (14., 4.));
+        assert_eq!(natural_line(13., 3.), (13., 3.));
     }
 
     #[core::prelude::v1::test]

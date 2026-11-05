@@ -505,6 +505,7 @@ impl Editor {
             .top(px(metrics.hit_top()))
             .w(px(RAIL_WIDTH))
             .h(px(metrics.hit_height()))
+            .occlude()
             .cursor_default()
             .child(tick_canvas)
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| this.rail_pointer(e.position.y, cx)))
@@ -642,8 +643,8 @@ impl Editor {
                 .right_0()
                 .w(px(RAIL_WIDTH + EDGE_INSET))
                 .h_full()
-                .occlude()
-                .cursor_default()
+                // Only the tick strip and the card take the pointer; the rest of
+                // the column is the page's, for scrolling and the scroller.
                 .child(hit)
                 .children(card)
                 .into_any_element(),

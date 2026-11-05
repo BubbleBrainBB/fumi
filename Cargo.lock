@@ -1497,6 +1497,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "unicode-normalization",
+ "unicode-properties",
  "unicode-segmentation",
 ]
 
@@ -1516,6 +1517,10 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-video",
  "ratex-gpui",
+ "ratex-layout",
+ "ratex-parser",
+ "ratex-render",
+ "ratex-types",
  "regex",
  "ropey",
  "sha2 0.10.9",

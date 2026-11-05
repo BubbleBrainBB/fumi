@@ -1051,6 +1051,13 @@ fn render_on_paper(
                         prev_has_caret: false,
                         media: Some(&paper_media),
                         reveal_media: false,
+                        first: start == 0,
+                        last: start + 1 == lines.len(),
+                        comment_carry: if kind == Kind::FenceBody {
+                            comment_carry_at(start, lines.len(), &kind_of_block, |l| lines[l].kind, |l| source[l])
+                        } else {
+                            (false, false)
+                        },
                     },
                 );
                 let laid = lay_out_line(display, &mut fonts, column, page_height);

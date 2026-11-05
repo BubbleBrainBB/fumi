@@ -31,6 +31,11 @@ pub const CAPTION_HEIGHT: f32 = 26.;
 /// From the image's foot to the caption's top.
 pub const CAPTION_GAP: f32 = 7.;
 const DISK_CAP: u64 = 512 * 1024 * 1024;
+/// Decoded remote images kept in memory, `URLCache`'s memory capacity. What's
+/// let go is decoded again from disk when it's next drawn.
+const MEMORY_CAP: usize = 32 * 1024 * 1024;
+/// Drawn this recently: on screen, so not let go whatever the cap says.
+const IN_USE: Duration = Duration::from_secs(2);
 /// How long a path that didn't exist stays unchecked.
 const MISSING_RECHECK: Duration = Duration::from_secs(2);
 const MAX_DECODES: usize = 4;
@@ -784,6 +789,10 @@ struct ImageEntry {
     path: PathBuf,
     probe: Probe,
     frames: Frames,
+    /// Came off the network: its pixels count against `MEMORY_CAP`.
+    remote: bool,
+    /// When its pixels were last asked for.
+    used: Instant,
 }
 
 enum Remote {
@@ -957,7 +966,7 @@ impl MediaStore {
             return Lookup::Missing;
         };
         self.not_images.remove(&key);
-        let entry = ImageEntry { path, probe, frames: Frames::Waiting };
+        let entry = ImageEntry { path, probe, frames: Frames::Waiting, remote: false, used: Instant::now() };
         let lookup = entry.lookup(&key);
         self.images.insert(key, entry);
         lookup
@@ -978,7 +987,7 @@ impl MediaStore {
         if file.exists() {
             if let Some(probe) = probe_image(&file) {
                 touch(&file);
-                let entry = ImageEntry { path: file, probe, frames: Frames::Waiting };
+                let entry = ImageEntry { path: file, probe, frames: Frames::Waiting, remote: true, used: Instant::now() };
                 let lookup = entry.lookup(&key);
                 self.remotes.insert(key.clone(), Remote::Done);
                 self.images.insert(key, entry);
@@ -1017,6 +1026,7 @@ impl MediaStore {
     /// first time it's asked for. `None` until there are pixels.
     pub fn frame(&mut self, key: &str) -> Option<(Arc<RenderImage>, usize, f32)> {
         let entry = self.images.get_mut(key)?;
+        entry.used = Instant::now();
         match &entry.frames {
             Frames::Waiting => {
                 entry.frames = Frames::Decoding;
@@ -1071,7 +1081,8 @@ impl MediaStore {
                 match result {
                     Ok((path, probe, decoded)) => {
                         let frames = decoded.map_or(Frames::Failed, |d| Frames::Ready(Rc::new(d)));
-                        self.images.insert(key.clone(), ImageEntry { path, probe, frames });
+                        let used = Instant::now();
+                        self.images.insert(key.clone(), ImageEntry { path, probe, frames, remote: true, used });
                         self.remotes.insert(key, Remote::Done);
                     }
                     Err(failure) => {
@@ -1094,10 +1105,60 @@ impl MediaStore {
         retry
     }
 
+    /// Lets go of the least recently drawn remote images until what's held fits
+    /// the cap, never one still on screen. Returns their pixels, for the windows
+    /// to drop too.
+    fn trim_memory(&mut self) -> Vec<Arc<RenderImage>> {
+        let mut held: Vec<(Instant, usize, &String)> = self
+            .images
+            .iter()
+            .filter(|(_, e)| e.remote)
+            .filter_map(|(k, e)| match &e.frames {
+                Frames::Ready(d) => Some((e.used, decoded_bytes(d), k)),
+                _ => None,
+            })
+            .collect();
+        let now = Instant::now();
+        let evict: Vec<String> = over_cap(&mut held, now).into_iter().cloned().collect();
+        evict
+            .into_iter()
+            .filter_map(|k| {
+                let entry = self.images.get_mut(&k)?;
+                match std::mem::replace(&mut entry.frames, Frames::Waiting) {
+                    Frames::Ready(d) => Some(d.image.clone()),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
     fn listeners(&mut self) -> Vec<WeakEntity<Editor>> {
         self.listeners.retain(|l| l.is_upgradable());
         self.listeners.clone()
     }
+}
+
+fn decoded_bytes(d: &Decoded) -> usize {
+    (0..d.delays.len().max(1)).map(|i| d.image.as_bytes(i).map_or(0, <[u8]>::len)).sum()
+}
+
+/// Which of `held` (last drawn, bytes, key) go, oldest first, to get under
+/// `MEMORY_CAP`, sparing what was drawn within `IN_USE` of `now`.
+fn over_cap<'a, K>(held: &mut [(Instant, usize, &'a K)], now: Instant) -> Vec<&'a K> {
+    let mut total: usize = held.iter().map(|h| h.1).sum();
+    held.sort_by_key(|h| h.0);
+    let mut out = Vec::new();
+    for (used, bytes, key) in held.iter() {
+        if total <= MEMORY_CAP {
+            break;
+        }
+        if now.duration_since(*used) < IN_USE {
+            continue;
+        }
+        total -= bytes;
+        out.push(*key);
+    }
+    out
 }
 
 impl ImageEntry {
@@ -1133,7 +1194,14 @@ pub fn pump(cx: &mut App) {
         }
         cx.spawn(async move |cx: &mut AsyncApp| {
             let Ok(done) = rx.await else { return };
-            let retry = with_store(|s| s.finish(done));
+            let (retry, dropped) = with_store(|s| (s.finish(done), s.trim_memory()));
+            if !dropped.is_empty() {
+                cx.update(|cx| {
+                    for image in dropped {
+                        cx.drop_image(image, None);
+                    }
+                });
+            }
             tell_listeners(cx);
             cx.update(|cx| pump(cx));
             if let Some(delay) = retry {
@@ -1148,6 +1216,23 @@ pub fn pump(cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[core::prelude::v1::test]
+    fn remote_images_past_the_cap_go_oldest_first_but_not_on_screen() {
+        let now = Instant::now();
+        let ago = |s: u64| now - Duration::from_secs(s);
+        let mb = 1024 * 1024;
+        let (a, b, c, d) = ("a", "b", "c", "d");
+        // 40 MB held: the oldest goes, and that's enough.
+        let mut held = [(ago(30), 10 * mb, &a), (ago(60), 10 * mb, &b), (ago(10), 10 * mb, &c), (ago(5), 10 * mb, &d)];
+        assert_eq!(over_cap(&mut held, now), [&b]);
+        // Under the cap: nothing.
+        let mut held = [(ago(30), 10 * mb, &a)];
+        assert!(over_cap(&mut held, now).is_empty());
+        // All on screen: kept, over the cap or not.
+        let mut held = [(now, 30 * mb, &a), (now, 30 * mb, &b)];
+        assert!(over_cap(&mut held, now).is_empty());
+    }
 
     #[core::prelude::v1::test]
     fn paths_are_cleaned_before_resolving() {
