@@ -438,7 +438,7 @@ mod tests {
         )
     }
 
-    #[test]
+    #[core::prelude::v1::test]
     fn hides_markers_off_the_caret_line() {
         let d = line("a **粗体** `x`", Kind::Para, false);
         assert_eq!(d.text.as_ref(), "a 粗体 x");
@@ -449,7 +449,7 @@ mod tests {
         assert_eq!(d.gutter.as_deref(), Some("•"));
     }
 
-    #[test]
+    #[core::prelude::v1::test]
     fn caret_line_shows_the_source_unchanged() {
         for (src, kind) in [
             ("a **粗体** `x` [l](u) [[w]]", Kind::Para),
@@ -466,7 +466,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[core::prelude::v1::test]
     fn map_round_trips_visible_offsets() {
         let src = "前 **粗体** 后 `码` [链](u) 尾";
         let d = line(src, Kind::Para, false);

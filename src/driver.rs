@@ -123,23 +123,20 @@ unsafe extern "C" {
     fn CFRelease(cf: *const std::ffi::c_void);
 }
 
-/// One pixel-precise wheel notch, the kind a trackpad sends.
+/// One pixel-precise wheel notch, the kind a trackpad sends. An event made from
+/// a CGEvent carries no window, and AppKit reads its location as screen
+/// coordinates, so the location is the point inside the window where the list is.
 fn post_scroll(dy: i32) {
     unsafe {
-        let app: id = msg_send![class!(NSApplication), sharedApplication];
         let window = ns_window();
-        let frame: cocoa::foundation::NSRect = msg_send![window, frame];
         let screen: id = msg_send![class!(NSScreen), mainScreen];
         let sf: cocoa::foundation::NSRect = msg_send![screen, frame];
-        let at = NSPoint::new(
-            frame.origin.x + frame.size.width / 2.,
-            sf.size.height - frame.origin.y - frame.size.height / 2.,
-        );
         let cg = CGEventCreateScrollWheelEvent(std::ptr::null(), 0, 1, dy);
-        CGEventSetLocation(cg, at);
+        CGEventSetLocation(cg, NSPoint::new(550., sf.size.height - 400.));
         let ev: id = msg_send![class!(NSEvent), eventWithCGEvent: cg];
-        let _: () = msg_send![window, sendEvent: ev];
-        let _ = app;
+        // The content view is a plain container; GPUI's view is the first responder.
+        let view: id = msg_send![window, firstResponder];
+        let _: () = msg_send![view, scrollWheel: ev];
         CFRelease(cg);
     }
 }
@@ -486,43 +483,48 @@ async fn run(scenario: &str, window: WindowHandle<Editor>, cx: &mut AsyncApp) {
             }
             report("backspace", &samples, failed);
         }
-        "scroll" => {
+        "scroll" | "fling" => {
+            // scroll: steady trackpad speed, about 1800 pt/s, mostly over text
+            // the list has already measured. fling: 400 pt per event, so every
+            // frame lays out and shapes text it has never seen.
+            let (step_px, secs) = if scenario == "fling" { (-400, 8) } else { (-14, 6) };
             sleep(cx, 300).await;
-            shot("scroll-top");
             let top0 = window
                 .update(cx, |e, _, _| e.list.logical_scroll_top().item_ix)
                 .unwrap();
             let b0 = metrics::busy_ns();
+            metrics::take_slices();
             metrics::record_frames(true);
             let t = Instant::now();
             let mut sent = 0u32;
-            // Six seconds of steady trackpad-speed scrolling, about 1800 pt/s.
-            while t.elapsed() < Duration::from_secs(6) {
-                post_scroll(-14);
+            while t.elapsed() < Duration::from_secs(secs) {
+                post_scroll(step_px);
                 sent += 1;
                 sleep(cx, 8).await;
             }
             sleep(cx, 100).await;
             metrics::record_frames(false);
             let frames = metrics::take_frames();
+            let slices = metrics::take_slices();
             let elapsed = t.elapsed().as_secs_f64();
             let top1 = window
                 .update(cx, |e, _, _| e.list.logical_scroll_top().item_ix)
                 .unwrap();
+            let items = window.update(cx, |e, _, _| e.items.len()).unwrap();
             let mut draws: Vec<f64> = frames.iter().map(|f| ms(f.1)).collect();
             let gaps: Vec<f64> = frames.windows(2).map(|w| ms(w[1].0 - w[0].0)).collect();
             let over = draws.iter().filter(|d| **d > 16.7).count();
-            let gap_over = gaps.iter().filter(|g| **g > 16.7).count();
+            let dropped = gaps.iter().filter(|g| **g > 25.0).count();
             let gap_max = gaps.iter().cloned().fold(0., f64::max);
+            let long_slices = slices.iter().filter(|s| ms(**s) > 16.7).count();
+            let slice_max = slices.iter().map(|s| ms(*s)).fold(0., f64::max);
             println!(
-                "RESULT scroll: {} wheel events, item {} -> {}, {} frames in {:.1}s ({:.0} fps), draws over 16.7ms={}, frame gaps over 16.7ms={}, longest gap={:.1}ms, draw p50={:.2} p95={:.2} max={:.2}, main-thread busy {:.0}%",
-                sent, top0, top1, frames.len(), elapsed, frames.len() as f64 / elapsed,
-                over, gap_over, gap_max,
+                "RESULT {scenario}: {sent} wheel events, item {top0}->{top1} of {items}, {} frames in {elapsed:.1}s ({:.0} fps) | draw>16.7ms={over} draw p50={:.2} p95={:.2} max={:.2} | main-thread stretches>16.7ms={long_slices} longest={slice_max:.1} | missed vsync (gap>25ms)={dropped} longest gap={gap_max:.1} | busy {:.0}%",
+                frames.len(), frames.len() as f64 / elapsed,
                 pct(&mut draws.clone(), 0.5), pct(&mut draws.clone(), 0.95), pct(&mut draws, 1.0),
                 ms(metrics::busy_ns() - b0) / (elapsed * 10.),
             );
             println!("CHECK scroll moved: {}", top1 > top0);
-            shot("scroll-end");
         }
         "click" => {
             let line: usize = std::env::var("FUMI_LINE").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
@@ -573,7 +575,7 @@ async fn ime(window: WindowHandle<Editor>, cx: &mut AsyncApp) {
             unsafe { objc::Encoding::from_str("{_NSRange=QQ}") }
         }
     }
-    let view = || -> id { unsafe { msg_send![ns_window(), contentView] } };
+    let view = || -> id { unsafe { msg_send![ns_window(), firstResponder] } };
     for (text, sel) in [("n", 1u64), ("ni", 2), ("ni h", 4), ("ni hao", 6)] {
         unsafe {
             let _: () = msg_send![view(),

@@ -125,6 +125,8 @@ pub struct Editor {
     pub text_width: Pixels,
     list_width: Pixels,
     margin: Pixels,
+    /// `FUMI_BLUR`: leave the page translucent over the window's blur.
+    see_through: bool,
     autoscroll_caret: bool,
     last_shown: usize,
     restore_hints: bool,
@@ -164,6 +166,7 @@ impl Editor {
             text_width: px(720.),
             list_width: px(720.),
             margin: px(0.),
+            see_through: std::env::var("FUMI_BLUR").is_ok(),
             autoscroll_caret: false,
             last_shown: 0,
             restore_hints: false,
@@ -994,7 +997,7 @@ impl Render for Editor {
             .track_focus(&self.focus)
             .size_full()
             .relative()
-            .bg(rgb(0xFFFFFF))
+            .bg(if self.see_through { hsla(0., 0., 1., 0.55) } else { hsla(0., 0., 1., 1.) })
             .text_color(ink())
             .font(body_font())
             .cursor(CursorStyle::IBeam);
@@ -1271,7 +1274,7 @@ mod tests {
 
     const DOC: &str = "---\ntitle: x\n---\n\n# T\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\ntext\n\n$$\nx\n$$\n\n![p](a.png)\n\n```\n| not | table |\n$$\n```\nend";
 
-    #[test]
+    #[core::prelude::v1::test]
     fn folds_blocks_and_respects_fences() {
         let lines = scan_all(DOC);
         assert_eq!(lines.len(), DOC.split('\n').count());
@@ -1282,7 +1285,7 @@ mod tests {
         assert_eq!(covered as usize, lines.len());
     }
 
-    #[test]
+    #[core::prelude::v1::test]
     fn revealed_block_becomes_lines() {
         let lines = scan_all(DOC);
         let folded = build_items(&lines, None).len();
@@ -1290,13 +1293,13 @@ mod tests {
         assert_eq!(open, folded + 2);
     }
 
-    #[test]
+    #[core::prelude::v1::test]
     fn unclosed_math_is_not_folded() {
         let lines = scan_all("$$\nx\n");
         assert!(build_items(&lines, None).iter().all(|i| i.kind == ItemKind::Line));
     }
 
-    #[test]
+    #[core::prelude::v1::test]
     fn crlf_tables_classify() {
         let lines = scan_all("| a |\r\n| - |\r\n| 1 |\r\n");
         assert_eq!(lines[0].kind, Kind::TableHead);

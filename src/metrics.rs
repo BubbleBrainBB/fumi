@@ -24,6 +24,7 @@ static LOAD_ROPE: AtomicU64 = AtomicU64::new(0);
 static LOAD_SCAN: AtomicU64 = AtomicU64::new(0);
 static RECORD: AtomicBool = AtomicBool::new(false);
 static FRAMES: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
+static SLICES: Mutex<Vec<u64>> = Mutex::new(Vec::new());
 static START: Mutex<Option<Instant>> = Mutex::new(None);
 
 pub fn now() -> u64 {
@@ -75,6 +76,11 @@ pub fn take_frames() -> Vec<(u64, u64)> {
     std::mem::take(&mut FRAMES.lock().unwrap())
 }
 
+/// Each uninterrupted stretch of main-thread work since recording began.
+pub fn take_slices() -> Vec<u64> {
+    std::mem::take(&mut SLICES.lock().unwrap())
+}
+
 /// Main-thread busy time so far, counting the stretch in progress.
 pub fn busy_ns() -> u64 {
     let total = BUSY_TOTAL.load(Relaxed);
@@ -111,6 +117,9 @@ extern "C" fn on_activity(_: *mut c_void, activity: usize, _: *mut c_void) {
     } else if activity == BEFORE_WAITING && IN_SLICE.swap(false, Relaxed) {
         let d = now().saturating_sub(SLICE_START.load(Relaxed));
         BUSY_TOTAL.fetch_add(d, Relaxed);
+        if RECORD.load(Relaxed) {
+            SLICES.lock().unwrap().push(d);
+        }
     }
 }
 

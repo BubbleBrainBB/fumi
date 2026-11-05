@@ -1,5 +1,3 @@
-#![recursion_limit = "512"]
-
 mod blocks;
 mod display;
 mod doc;
