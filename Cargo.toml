@@ -13,7 +13,7 @@ fumi-ui = { path = "crates/fumi-ui" }
 fumi-editor = { path = "crates/fumi-editor" }
 fumi-workspace = { path = "crates/fumi-workspace" }
 fumi-sidebar = { path = "crates/fumi-sidebar" }
-fumi-chrome = { path = "crates/fumi-chrome" }
+fumi-toolbar = { path = "crates/fumi-toolbar" }
 fumi-memos = { path = "crates/fumi-memos" }
 fumi-settings = { path = "crates/fumi-settings" }
 gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false }

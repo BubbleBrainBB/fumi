@@ -1488,18 +1488,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fumi-chrome"
-version = "0.1.0"
-dependencies = [
- "fumi-core",
- "fumi-ui",
- "fumi-workspace",
- "gpui-pre",
- "gpui-pre-platform",
- "smallvec",
-]
-
-[[package]]
 name = "fumi-core"
 version = "0.1.0"
 dependencies = [
@@ -1536,12 +1524,12 @@ name = "fumi-gpui"
 version = "0.1.0"
 dependencies = [
  "cocoa 0.26.1",
- "fumi-chrome",
  "fumi-core",
  "fumi-editor",
  "fumi-memos",
  "fumi-settings",
  "fumi-sidebar",
+ "fumi-toolbar",
  "fumi-ui",
  "fumi-workspace",
  "gpui-pre",
@@ -1576,6 +1564,18 @@ dependencies = [
 
 [[package]]
 name = "fumi-sidebar"
+version = "0.1.0"
+dependencies = [
+ "fumi-core",
+ "fumi-ui",
+ "fumi-workspace",
+ "gpui-pre",
+ "gpui-pre-platform",
+ "smallvec",
+]
+
+[[package]]
+name = "fumi-toolbar"
 version = "0.1.0"
 dependencies = [
  "fumi-core",
