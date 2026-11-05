@@ -6,9 +6,12 @@ mod root;
 
 use fumi_editor::editor::{self, Editor, Quit};
 use fumi_editor::{driver, metrics};
+use fumi_toolbar::AppHooks;
+use fumi_workspace::WindowStart;
 use gpui::*;
 use root::RootView;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::Instant;
 
 fn main() {
@@ -21,27 +24,41 @@ fn main() {
     }
 }
 
+fn open_window(start: WindowStart, cx: &mut App) {
+    let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
+    let _ = cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            window_min_size: Some(size(px(1016.), px(600.))),
+            titlebar: Some(TitlebarOptions {
+                title: Some("Fumi".into()),
+                appears_transparent: true,
+                traffic_light_position: Some(point(px(19.), px(18.))),
+            }),
+            ..Default::default()
+        },
+        |window, cx| cx.new(|cx| RootView::new(start, window, cx)),
+    );
+    cx.activate(true);
+}
+
 fn run_app() {
-    gpui_platform::application().run(move |cx: &mut App| {
+    let app = gpui_platform::application();
+    app.on_reopen(|cx| fumi_toolbar::handle_dock_reopen(cx));
+    app.run(move |cx: &mut App| {
+        fumi_settings::sheet::migrate_old_settings();
+        fumi_ui::theme::apply_from_settings(false);
+        // The last bound wins: the menu bar's own shortcuts go last.
         editor::bind_keys(cx);
-        fumi_ui::text_field::bind_keys(cx);
-        cx.on_action(|_: &Quit, cx| cx.quit());
-        let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                window_min_size: Some(size(px(1016.), px(600.))),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Fumi".into()),
-                    appears_transparent: true,
-                    traffic_light_position: Some(point(px(19.), px(18.))),
-                }),
-                ..Default::default()
-            },
-            |window, cx| cx.new(|cx| RootView::new(window, cx)),
-        )
-        .unwrap();
-        cx.activate(true);
+        fumi_sidebar::bind_keys(cx);
+        fumi_settings::bind_keys(cx);
+        fumi_memos::bind_keys(cx);
+        fumi_toolbar::install(
+            cx,
+            AppHooks { open_window: Rc::new(open_window), new_memo: Rc::new(fumi_memos::QuickCapture::show) },
+        );
+        fumi_memos::QuickCapture::install(cx);
+        fumi_toolbar::open_first_window(cx);
     });
 }
 

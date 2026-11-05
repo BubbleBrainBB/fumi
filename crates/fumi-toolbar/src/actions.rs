@@ -92,7 +92,6 @@ pub fn key_bindings() -> Vec<KeyBinding> {
 
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys(key_bindings());
-    cx.bind_keys([KeyBinding::new("enter", crate::welcome::OpenDefault, Some(crate::welcome::CONTEXT))]);
 }
 
 /// What the focused window can do right now. Whatever is false greys its menu
@@ -324,7 +323,6 @@ pub fn register_actions<E: InteractiveElement>(mut el: E, toolbar: &Entity<Toolb
         });
     }
     on!(OpenSettings, |t, _, cx| on_workspace(t, cx, |w, _| w.model.show_settings = true));
-    on!(ToggleSidebar, |t, _, cx| on_workspace(t, cx, |w, _| w.model.toggle_sidebar()));
     if caps.can_go_back {
         on!(GoBack, |t, _, cx| on_workspace(t, cx, |w, _| w.model.go_back()));
     }
@@ -332,14 +330,6 @@ pub fn register_actions<E: InteractiveElement>(mut el: E, toolbar: &Entity<Toolb
         on!(GoForward, |t, _, cx| on_workspace(t, cx, |w, _| w.model.go_forward()));
     }
     on!(SearchNotes, |t, _, cx| on_workspace(t, cx, |w, _| w.model.search_presented = true));
-    if caps.library_open {
-        on!(ShowLibraries, |t, _, cx| {
-            on_workspace(t, cx, |w, _| {
-                w.model.sidebar_visible = true;
-                w.model.shows_libraries = true;
-            });
-        });
-    }
     on_library!(
         GoToLibrary1 => 0, GoToLibrary2 => 1, GoToLibrary3 => 2, GoToLibrary4 => 3, GoToLibrary5 => 4,
         GoToLibrary6 => 5, GoToLibrary7 => 6, GoToLibrary8 => 7, GoToLibrary9 => 8

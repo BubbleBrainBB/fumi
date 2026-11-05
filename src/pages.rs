@@ -2,6 +2,9 @@
 //! back to shows exactly what it showed, or the Memos and file pages. Saving and
 //! taking in outside changes happen here. A port of `EditorView`'s host logic.
 
+use fumi_memos::MemosView;
+use fumi_settings::file_preview::FilePreview;
+use fumi_settings::welcome::{EmptyLibraryPage, EmptyPage, empty_page};
 use fumi_workspace::{Workspace, WorkspaceEvent, now};
 use fumi_core::note_store::{ReadError, read_note_file};
 use fumi_core::tabs::Content;
@@ -26,14 +29,16 @@ pub struct NotePage {
     _sub: Subscription,
 }
 
-pub struct ToolbarContent {
-    pub title: SharedString,
-    pub subtitle: Option<SharedString>,
-}
-
 pub struct PageHost {
     pub workspace: Entity<Workspace>,
     pub pages: HashMap<String, NotePage>,
+    /// The file on the active tab. Dropped otherwise: its native view would stay
+    /// on screen.
+    file: Option<(String, Entity<FilePreview>)>,
+    empty: Entity<EmptyLibraryPage>,
+    /// The Memos page while its tab is active; leaving loses the draft and
+    /// filters, as in Swift.
+    memos: Option<Entity<MemosView>>,
     typo: Typography,
     _subs: Vec<Subscription>,
 }
@@ -51,9 +56,13 @@ impl PageHost {
                 }
             }),
         ];
+        let empty = cx.new(|cx| EmptyLibraryPage::new(workspace.clone(), cx));
         PageHost {
             workspace,
             pages: HashMap::new(),
+            file: None,
+            empty,
+            memos: None,
             typo: Typography::from_settings(),
             _subs: subs,
         }
@@ -77,7 +86,7 @@ impl PageHost {
             .pages
             .iter()
             .filter(|(id, page)| match tabs.get(*id) {
-                Some(Content::Note(note)) => *note != page.note_id && !page.is_draft,
+                Some(Content::Note(note)) => *note != page.note_id,
                 Some(Content::Draft) => !page.is_draft,
                 _ => true,
             })
@@ -192,6 +201,16 @@ impl PageHost {
                         page.editor.update(cx, |e, cx| e.replace_from_outside(&written, cx));
                     }
                 }
+                if let Some(copy) = saved.conflict_copy {
+                    let workspace = self.workspace.clone();
+                    let (id, name) = (copy.id.clone(), copy.filename());
+                    cx.defer(move |cx| {
+                        let Some(window) = cx.active_window() else { return };
+                        let _ = window.update(cx, |_, window, cx| {
+                            fumi_toolbar::alerts::show_conflict_copy(id, &name, &workspace, window, cx);
+                        });
+                    });
+                }
                 if saved.adopted_draft {
                     page.is_draft = false;
                     let tab = tab.to_string();
@@ -250,19 +269,11 @@ impl PageHost {
         }
     }
 
-    pub fn toolbar(&self, cx: &App) -> ToolbarContent {
+    /// The active tab's text as typed, for the toolbar's counts.
+    pub fn active_text(&self, cx: &App) -> Option<String> {
         let w = self.workspace.read(cx);
-        let title: SharedString = match w.model.active_content() {
-            Content::Draft => "New Note".into(),
-            Content::Memos => "Memos".into(),
-            Content::Note(id) => w.note(id).map(|n| n.filename()).unwrap_or_default().into(),
-            Content::File(id) => Path::new(id)
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default()
-                .into(),
-        };
-        ToolbarContent { title, subtitle: None }
+        let page = self.pages.get(w.model.active_id())?;
+        Some(page.editor.read(cx).text())
     }
 }
 
@@ -274,8 +285,44 @@ impl Render for PageHost {
             let active = w.model.active_tab();
             (active.id.clone(), active.content.clone())
         };
+        // A library with no notes shows a page about that instead of a draft.
+        if content == Content::Draft {
+            let (loaded, count) = {
+                let w = self.workspace.read(cx);
+                (w.store.has_loaded_notes(), w.store.notes().len())
+            };
+            match empty_page(loaded, count) {
+                EmptyPage::NoNotes => return div().size_full().bg(c.page_content).child(self.empty.clone()).into_any_element(),
+                EmptyPage::Blank => return div().size_full().bg(c.page_content).into_any_element(),
+                EmptyPage::Draft => {}
+            }
+        }
         self.ensure_page(&tab, &content, window, cx);
         let body = div().size_full().bg(c.page_content);
+        match &content {
+            Content::File(id) => {
+                let current = self.file.as_ref().is_some_and(|(shown, _)| shown == id);
+                if !current {
+                    let file = self.workspace.read(cx).store.files().iter().find(|f| f.id == *id).cloned();
+                    self.file = match file {
+                        Some(file) => {
+                            let workspace = self.workspace.clone();
+                            Some((id.clone(), cx.new(|cx| FilePreview::new(workspace, &file, window, cx))))
+                        }
+                        None => None,
+                    };
+                }
+            }
+            _ => self.file = None,
+        }
+        if content == Content::Memos {
+            if self.memos.is_none() {
+                let workspace = self.workspace.clone();
+                self.memos = Some(cx.new(|cx| MemosView::new(workspace, window, cx)));
+            }
+        } else {
+            self.memos = None;
+        }
         match content {
             Content::Draft | Content::Note(_) => match self.pages.get(&tab) {
                 Some(page) if page.error.is_some() => body
@@ -288,8 +335,14 @@ impl Render for PageHost {
                 Some(page) => body.child(page.editor.clone()).into_any_element(),
                 None => body.into_any_element(),
             },
-            Content::Memos => body.child("Memos").into_any_element(),
-            Content::File(id) => body.child(id).into_any_element(),
+            Content::Memos => match &self.memos {
+                Some(memos) => body.child(memos.clone()).into_any_element(),
+                None => body.into_any_element(),
+            },
+            Content::File(_) => match &self.file {
+                Some((_, preview)) => body.child(preview.clone()).into_any_element(),
+                None => body.into_any_element(),
+            },
         }
     }
 }

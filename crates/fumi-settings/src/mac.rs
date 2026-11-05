@@ -157,7 +157,7 @@ pub fn image_file_size(path: &Path) -> Option<(f32, f32)> {
 fn main_app_service() -> Option<id> {
     load_framework("ServiceManagement");
     let class = class_named("SMAppService")?;
-    let service: id = unsafe { msg_send![class, mainApp] };
+    let service: id = unsafe { msg_send![class, mainAppService] };
     (service != nil).then_some(service)
 }
 
