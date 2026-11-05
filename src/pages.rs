@@ -120,10 +120,12 @@ impl PageHost {
         let bytes = text.clone().into_bytes();
         let links = self.link_context(&path, cx);
         let typo = self.typo.clone();
+        let library = self.workspace.read(cx).workspace_path();
         let editor = cx.new(move |cx| {
             let mut e = Editor::new(bytes, Some(path), true, cx);
             e.typo = typo;
             e.links = links;
+            e.library = library;
             e
         });
         if is_draft {
