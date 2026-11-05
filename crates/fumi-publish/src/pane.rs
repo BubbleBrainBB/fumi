@@ -1780,6 +1780,8 @@ pub fn beside_page(page: impl IntoElement, pane: &Entity<PublishPane>, radius: f
     }
     row.child(
         div()
+            // Clicks here are the pane's, not the page's under it.
+            .occlude()
             .absolute()
             .top_0()
             .bottom_0()
