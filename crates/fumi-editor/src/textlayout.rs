@@ -26,6 +26,22 @@ pub struct Row {
     pub x0: Pixels,
     pub y: Pixels,
     pub height: Pixels,
+    /// The tallest box sitting on this row's baseline, with the line's descent.
+    pub box_tall: Pixels,
+    /// The row starts with a box that takes the whole row: a revealed image.
+    /// The source's end, which is this row's start, belongs to the row above.
+    pub fill: bool,
+}
+
+/// How an inline box sits in its row.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BoxMode {
+    /// Typeset math, centered on the text's middle.
+    Centered,
+    /// An attachment, its bottom on the baseline.
+    Baseline,
+    /// The same, reserving the row for itself.
+    BaselineFill,
 }
 
 pub struct RunInput<'a> {
@@ -36,6 +52,7 @@ pub struct RunInput<'a> {
     pub kern_after: Pixels,
     /// An inline box (typeset math) stands for this run: no glyphs.
     pub box_size: Option<Size<Pixels>>,
+    pub box_mode: BoxMode,
 }
 
 pub struct Laid {
@@ -46,6 +63,8 @@ pub struct Laid {
     pub run_at: Vec<usize>,
     pub rows: Vec<Row>,
     pub height: Pixels,
+    /// Where the inline boxes start, in bytes.
+    pub boxes: Vec<usize>,
 }
 
 pub fn is_cjk(c: char) -> bool {
@@ -68,7 +87,17 @@ fn no_break_after(c: char) -> bool {
     matches!(c, '（' | '《' | '「' | '『' | '【' | '〔' | '〈' | '“' | '‘' | '(' | '[' | '{')
 }
 
+/// What stands for an inline box in the visible text.
+pub const OBJECT: char = '\u{FFFC}';
+
 pub fn can_break_between(prev: char, next: char) -> bool {
+    // As TextKit treats attachments: a line may break on either side of one.
+    if next == OBJECT {
+        return true;
+    }
+    if prev == OBJECT && !next.is_whitespace() && !no_break_before(next) {
+        return true;
+    }
     if next.is_whitespace() || no_break_before(next) || no_break_after(prev) {
         return false;
     }
@@ -189,21 +218,27 @@ impl Laid {
             Vec::new()
         };
 
-        let mut laid = Laid { glyphs, run_x, run_at, rows: Vec::with_capacity(starts.len() + 1), height: px(0.) };
+        let boxes = runs.iter().zip(&run_at).filter(|(run, _)| run.box_size.is_some()).map(|(_, at)| *at).collect();
+        let mut laid = Laid { glyphs, run_x, run_at, rows: Vec::with_capacity(starts.len() + 1), height: px(0.), boxes };
         let mut start = 0;
         let mut row_x = x0;
         let mut y = px(0.);
         for (i, end) in starts.iter().copied().chain([text.len()]).enumerate() {
-            let tallest = runs
-                .iter()
-                .enumerate()
-                .filter(|(r, run)| {
-                    run.box_size.is_some() && laid.run_at[*r] >= start && laid.run_at[*r] < end.max(start + 1)
-                })
-                .filter_map(|(_, run)| run.box_size.map(|s| s.height))
-                .fold(px(0.), Pixels::max);
+            let (mut tallest, mut box_tall, mut fill) = (px(0.), px(0.), false);
+            for (r, run) in runs.iter().enumerate() {
+                let Some(size) = run.box_size else { continue };
+                let run_start = laid.run_at[r];
+                if run_start < start || run_start >= end.max(start + 1) {
+                    continue;
+                }
+                tallest = tallest.max(size.height);
+                if run.box_mode != BoxMode::Centered {
+                    box_tall = box_tall.max(size.height);
+                }
+                fill |= run.box_mode == BoxMode::BaselineFill && run_start == start && i > 0;
+            }
             let h = line_height(i, tallest);
-            laid.rows.push(Row { start, end, x0: row_x, y, height: h });
+            laid.rows.push(Row { start, end, x0: row_x, y, height: h, box_tall, fill });
             y += h;
             if end < text.len() {
                 row_x = laid.x_for_index(end);
@@ -234,7 +269,16 @@ impl Laid {
         }
     }
 
+    /// The row the caret shows on at `index`.
     pub fn row_of(&self, index: usize) -> usize {
+        let row = self.row_holding(index);
+        // A revealed image follows its source and stands for no text, so the
+        // boundary between them is the end of the source's row.
+        if self.rows[row].fill && self.rows[row].start == index { row - 1 } else { row }
+    }
+
+    /// The row holding what starts at byte `index`.
+    pub fn row_holding(&self, index: usize) -> usize {
         self.rows
             .iter()
             .rposition(|r| r.start <= index)
@@ -266,6 +310,15 @@ impl Laid {
                 best = i;
             }
         }
+        let mut last_box = None;
+        for at in self.boxes.iter().copied().filter(|at| *at >= r.start && *at < r.end) {
+            let d = (self.x_for_index(at) - target).abs();
+            if d < best_d {
+                best_d = d;
+                best = at;
+            }
+            last_box = Some(at);
+        }
         // Past the last glyph: the row's end, unless that's the next row's start.
         let end_x = if r.end < self.run_x_total_len() {
             self.x_for_index(r.end)
@@ -274,7 +327,7 @@ impl Laid {
         };
         if (end_x - target).abs() < best_d {
             let last = row + 1 == self.rows.len();
-            return if last { r.end } else { self.last_index_before(r.end).max(r.start) };
+            return if last { r.end } else { self.last_index_before(r.end).max(r.start).max(last_box.unwrap_or(0)) };
         }
         best
     }
@@ -347,5 +400,17 @@ mod tests {
     fn trailing_spaces_do_not_wrap() {
         let t = "abcd      ";
         assert!(wrap(t, &bounds(t, 10.), 100., 0., 40.).is_empty());
+    }
+
+    #[core::prelude::v1::test]
+    fn a_line_breaks_around_an_object() {
+        // A box too wide for what's left of the row goes to the next one, not
+        // back to the last space, and the row after it starts right behind it.
+        let t = "a b\u{FFFC}c";
+        let boundaries = [(0, 0.), (1, 10.), (2, 20.), (3, 30.), (6, 130.)];
+        assert_eq!(wrap(t, &boundaries, 140., 0., 100.), [3, 6]);
+        assert!(can_break_between('x', OBJECT));
+        assert!(can_break_between(OBJECT, 'x'));
+        assert!(!can_break_between(OBJECT, '，'));
     }
 }

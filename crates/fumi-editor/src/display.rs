@@ -6,6 +6,8 @@
 //! Each byte of the line carries style flags, and the inline rules stack on them
 //! independently the way the Swift rules stack attributes.
 
+use crate::media::{InlineMedia, Lookup, MediaInfo, MediaLookup};
+use crate::textlayout::OBJECT;
 use fumi_core::inline_link;
 use fumi_core::markdown::*;
 use fumi_core::wiki_link::{self, WikiLink};
@@ -209,6 +211,8 @@ pub struct Span {
     pub fill: Option<Fill>,
     pub kern_after: Pixels,
     pub math: Option<InlineMath>,
+    /// An image or video standing in the line.
+    pub media: Option<std::rc::Rc<InlineMedia>>,
 }
 
 #[derive(Clone)]
@@ -266,6 +270,8 @@ pub struct DisplayLine {
     pub links: Vec<(Range<usize>, Link)>,
     pub centered: bool,
     pub wrap: bool,
+    /// Something on this line may change height once it has loaded.
+    pub media_pending: bool,
 }
 
 impl DisplayLine {
@@ -592,6 +598,68 @@ fn replace_atom(atoms: &mut Vec<(Range<usize>, String, Option<Link>)>, range: Ra
     atoms.push((range, text, link));
 }
 
+/// An image or video the inline pass found in the line and can show.
+struct MediaAtom {
+    range: Range<usize>,
+    info: MediaInfo,
+    caption: String,
+    /// The caret touches it: the source stays, the picture comes after.
+    revealed: bool,
+}
+
+/// `![[file]]`, as `WysiwygEngine.embedPattern`.
+fn embed_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"!\[\[([^\]\n]+)\]\]").unwrap())
+}
+
+/// What the inline pass needs for a line's media, and what it reports back.
+#[derive(Default)]
+struct MediaPass<'a> {
+    lookup: Option<&'a dyn MediaLookup>,
+    /// A selection doesn't open what it passes over.
+    reveal: bool,
+    found: Vec<MediaAtom>,
+    pending: bool,
+}
+
+/// One image or embed in a line's source.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MediaSpan {
+    pub range: Range<usize>,
+    pub dest: String,
+    pub embed: bool,
+}
+
+/// Every image and embed in `src` outside inline code, in order.
+pub fn media_spans(src: &str) -> Vec<MediaSpan> {
+    if !src.contains("![") {
+        return Vec::new();
+    }
+    let code: Vec<Range<usize>> = if src.contains('`') {
+        code_re().captures_iter(src).map(|m| m.get(0).unwrap().range()).collect()
+    } else {
+        Vec::new()
+    };
+    let in_code = |r: &Range<usize>| code.iter().any(|c| c.start <= r.start && r.start < c.end);
+    let mut out = Vec::new();
+    for m in inline_link::image_pattern().captures_iter(src) {
+        let range = m.get(0).unwrap().range();
+        if !in_code(&range) {
+            let dest = src[inline_link::destination_range(&m)].to_string();
+            out.push(MediaSpan { range, dest, embed: false });
+        }
+    }
+    for m in embed_re().captures_iter(src) {
+        let range = m.get(0).unwrap().range();
+        if !in_code(&range) {
+            out.push(MediaSpan { range, dest: m[1].to_string(), embed: true });
+        }
+    }
+    out.sort_by_key(|m| m.range.start);
+    out
+}
+
 /// The line's inline pass, over `range`, with the caret at `caret` if it's here.
 #[allow(clippy::too_many_arguments)]
 fn inline_pass(
@@ -603,6 +671,7 @@ fn inline_pass(
     links: &mut Vec<(Range<usize>, Link)>,
     atoms: &mut Vec<(Range<usize>, String, Option<Link>)>,
     latex: &mut Vec<(Range<usize>, String)>,
+    media: &mut MediaPass,
 ) {
     if range.is_empty() {
         return;
@@ -643,6 +712,20 @@ fn inline_pass(
                 continue;
             }
             images.push(full.clone());
+            let dest = &s[inline_link::destination_range(&m)];
+            let revealed = media.reveal && active(&full);
+            match media.lookup.map_or(Lookup::Missing, |l| l.lookup(dest, false)) {
+                Lookup::Ready(info) => {
+                    media.pending |= info.settling;
+                    let caption = m.get(1).map_or("", |a| a.as_str()).to_string();
+                    media.found.push(MediaAtom { range: at + full.start..at + full.end, info, caption, revealed });
+                    if !revealed {
+                        continue;
+                    }
+                }
+                Lookup::Pending => media.pending = true,
+                Lookup::Missing => {}
+            }
             st.set(at + full.start..at + full.end, FAINT);
             if let Some(alt) = m.get(1)
                 && !alt.is_empty()
@@ -652,6 +735,33 @@ fn inline_pass(
             }
         }
     }
+    if s.contains("![[") {
+        for m in embed_re().captures_iter(s) {
+            let full = m.get(0).unwrap().range();
+            if in_code(&full) {
+                continue;
+            }
+            let revealed = media.reveal && active(&full);
+            match media.lookup.map_or(Lookup::Missing, |l| l.lookup(&m[1], true)) {
+                Lookup::Ready(info) => {
+                    media.pending |= info.settling;
+                    images.push(full.clone());
+                    media.found.push(MediaAtom {
+                        range: at + full.start..at + full.end,
+                        info,
+                        caption: String::new(),
+                        revealed,
+                    });
+                    if revealed {
+                        st.set(at + full.start..at + full.end, FAINT);
+                    }
+                }
+                Lookup::Pending => media.pending = true,
+                Lookup::Missing => {}
+            }
+        }
+    }
+    media.found.sort_by_key(|a| a.range.start);
     let skip = |r: &Range<usize>| in_code(r) || images.iter().any(|c| c.start <= r.start && r.start < c.end);
 
     let mut linked: Vec<Range<usize>> = images.clone();
@@ -793,7 +903,7 @@ fn inline_pass(
 
     if math_ok && s.contains('$') {
         for (full, inner) in inline_math_spans(s) {
-            if in_code(&full) {
+            if skip(&full) {
                 continue;
             }
             if active(&full) {
@@ -859,6 +969,10 @@ pub struct LineCtx<'a> {
     /// For a table or `$$` line opened for editing.
     pub raw_block: bool,
     pub prev_has_caret: bool,
+    /// Finds what `![…]` points at. Without it images stay source.
+    pub media: Option<&'a dyn MediaLookup>,
+    /// Whether the caret on this line opens the media it touches.
+    pub reveal_media: bool,
 }
 
 fn is_spaced_block(kind: Kind) -> bool {
@@ -983,6 +1097,7 @@ pub fn build_line(src: &str, cx: &LineCtx) -> DisplayLine {
     let mut math_ok = true;
     let mut wrap = true;
     let mut title_override: Option<(Range<usize>, String)> = None;
+    let mut media = MediaPass { lookup: cx.media, reveal: cx.reveal_media, ..Default::default() };
 
     let callout_box = |raw: &str, first: bool, last: bool| BoxDeco {
         fill: CalloutKind::of(raw).background(c.dark, c.glass),
@@ -1213,15 +1328,8 @@ pub fn build_line(src: &str, cx: &LineCtx) -> DisplayLine {
             inline = false;
             math_ok = false;
         }
-        Kind::Image => {
-            // Source in the quiet syntax color, the image below it.
-            st.set(0..src.len(), FAINT);
-            inline = false;
-            math_ok = false;
-            top = 8.;
-        }
         Kind::Blank => {}
-        Kind::Para => {
+        Kind::Para | Kind::Image => {
             // Markdown ignores up to three spaces before a paragraph; so does the
             // page, on the caret's line too, so the text never shifts.
             let spaces = src.bytes().take_while(|b| *b == b' ').count();
@@ -1260,11 +1368,27 @@ pub fn build_line(src: &str, cx: &LineCtx) -> DisplayLine {
             &mut links,
             &mut atoms,
             &mut latex,
+            &mut media,
         );
     }
 
+    // A paragraph takes its style from its first character, so a picture opening
+    // the line sets the spacing for all of it; one further along leaves the
+    // line's style alone. One whose source shows sets it however far along it is.
+    if matches!(cx.kind, Kind::Para | Kind::Image)
+        && let Some(first) = media.found.first()
+    {
+        let opens = src[..first.range.start].trim().is_empty();
+        let shown = media.found.iter().any(|a| a.revealed);
+        if shown || opens {
+            metric = LineMetric::Natural { spacing: if shown { 10. } else { 4. } };
+            top = top.max(8.);
+            bottom = bottom.max(8.);
+        }
+    }
+
     let mut b = Assembler::new(src, &c, typo, &base, cx.kind);
-    b.run(&st, &atoms, &latex, title_override.as_ref());
+    b.run(&st, &atoms, &latex, title_override.as_ref(), &media.found);
     let (text, mut spans, map, display_links) = (b.text, b.spans, b.map, b.links);
 
     // Links, in source bytes so far, move to visible bytes.
@@ -1307,6 +1431,7 @@ pub fn build_line(src: &str, cx: &LineCtx) -> DisplayLine {
         links: vis_links,
         centered: false,
         wrap,
+        media_pending: media.pending,
     }
 }
 
@@ -1521,6 +1646,7 @@ impl Assembler<'_> {
             fill,
             kern_after: px(0.),
             math: None,
+            media: None,
         }
     }
 
@@ -1615,16 +1741,44 @@ impl Assembler<'_> {
         self.spans.push(span);
     }
 
+    /// An object standing for an image: for all of its source, or, behind the
+    /// source when that shows, for none of it.
+    fn push_media(&mut self, atom: &MediaAtom) {
+        let disp = self.text.len();
+        self.text.push(OBJECT);
+        let mut span = self.span_for(0);
+        span.range = disp..disp + OBJECT.len_utf8();
+        span.media = Some(std::rc::Rc::new(InlineMedia {
+            info: atom.info.clone(),
+            caption: atom.caption.clone(),
+            fills_line: atom.revealed,
+            src: atom.range.clone(),
+        }));
+        let (src, src_len) = if atom.revealed { (atom.range.end, 0) } else { (atom.range.start, atom.range.len()) };
+        self.map.push(MapSeg { disp, src, disp_len: OBJECT.len_utf8(), src_len });
+        self.spans.push(span);
+    }
+
     fn run(
         &mut self,
         st: &Styled,
         atoms: &[(Range<usize>, String, Option<Link>)],
         latex: &[(Range<usize>, String)],
         title: Option<&(Range<usize>, String)>,
+        media: &[MediaAtom],
     ) {
         let mut i = 0;
         let n = st.flags.len();
+        let boundary = |a: &MediaAtom, at: usize| if a.revealed { a.range.end == at } else { a.range.start == at };
         while i < n {
+            if let Some(atom) = media.iter().find(|a| a.revealed && a.range.end == i) {
+                self.push_media(atom);
+            }
+            if let Some(atom) = media.iter().find(|a| !a.revealed && a.range.start == i) {
+                self.push_media(atom);
+                i = atom.range.end;
+                continue;
+            }
             if let Some((range, text, link)) = atoms.iter().find(|a| a.0.start == i) {
                 self.push_atom(range.clone(), text, 0, link.clone(), None);
                 i = range.end;
@@ -1650,6 +1804,7 @@ impl Assembler<'_> {
                 && !atoms.iter().any(|a| a.0.start == j)
                 && !latex.iter().any(|a| a.0.start == j)
                 && !title.is_some_and(|t| t.0.start == j)
+                && !media.iter().any(|a| boundary(a, j))
             {
                 j += 1;
             }
@@ -1657,6 +1812,9 @@ impl Assembler<'_> {
                 self.push_text(i..j, f);
             }
             i = j;
+        }
+        if let Some(atom) = media.iter().find(|a| a.revealed && a.range.end == n) {
+            self.push_media(atom);
         }
     }
 }
@@ -1675,10 +1833,11 @@ pub fn cell_spans(src: &str, header: bool, numeric: bool, typo: &Typography) -> 
     let mut links = Vec::new();
     let mut atoms = Vec::new();
     let mut latex = Vec::new();
-    inline_pass(&mut st, 0..src.len(), None, false, None, &mut links, &mut atoms, &mut latex);
+    let mut media = MediaPass::default();
+    inline_pass(&mut st, 0..src.len(), None, false, None, &mut links, &mut atoms, &mut latex, &mut media);
     let _ = numeric;
     let mut b = Assembler::new(src, &c, typo, &base, Kind::Para);
-    b.run(&st, &atoms, &latex, None);
+    b.run(&st, &atoms, &latex, None, &[]);
     (b.text.into(), b.spans)
 }
 
@@ -1697,6 +1856,8 @@ mod tests {
                 marked: None,
                 prev: Kind::Blank,
                 next: Kind::Blank,
+                media: None,
+                reveal_media: true,
                 block_type: "note",
                 typo: &typo,
                 links: None,

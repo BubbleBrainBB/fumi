@@ -496,6 +496,13 @@ pub struct Tokens {
     pub syntax_string: Hsla,
     pub syntax_number: Hsla,
     pub selection: Hsla,
+    // Video cards and players: the same in every theme, as `VideoAttachment` has them.
+    pub video_ground: Hsla,
+    pub video_shade: Hsla,
+    pub video_button: Hsla,
+    pub video_pill: Hsla,
+    pub video_ink: Hsla,
+    pub video_track: Hsla,
 }
 
 pub fn parse_hex(hex: &str) -> Option<u32> {
@@ -558,6 +565,12 @@ impl Tokens {
             syntax_number: adaptive(dark, 0x9A6B12, 0xD1A04A),
             
             selection: accent.opacity(0.18),
+            video_ground: hsla(0., 0., 0.12, 1.),
+            video_shade: hsla(0., 0., 0., 0.12),
+            video_button: hsla(0., 0., 0., 0.45),
+            video_pill: hsla(0., 0., 0., 0.6),
+            video_ink: hsla(0., 0., 1., 1.),
+            video_track: hsla(0., 0., 1., 0.3),
         }
     }
 }

@@ -2,7 +2,9 @@
 //! behind it, then selection, glyphs and what stands in for hidden syntax.
 
 use crate::display::*;
+use crate::media::{self, InlineMedia, MediaKind};
 use crate::textlayout::*;
+use crate::video::{self, VideoUi};
 use fumi_ui::native::{self, SymbolCache};
 use fumi_ui::theme::t;
 use gpui::*;
@@ -16,6 +18,8 @@ pub struct Shaped {
     pub ascent: Pixels,
     pub descent: Pixels,
     pub natural: bool,
+    /// The room a box gets: the column, less the line's indents.
+    pub column: Pixels,
 }
 
 impl Shaped {
@@ -23,7 +27,7 @@ impl Shaped {
     /// extra room goes above the text, as TextKit puts it.
     pub fn baseline(&self, row: usize) -> Pixels {
         if self.natural {
-            self.ascent
+            self.ascent.max(self.laid.rows[row].box_tall - self.descent)
         } else {
             self.laid.rows[row].height - self.descent
         }
@@ -63,38 +67,106 @@ pub fn shape(d: &DisplayLine, width: Pixels, window: &Window) -> Rc<Shaped> {
     let ascent = ts.ascent(font_id, d.font_size);
     let descent = ts.descent(font_id, d.font_size).abs();
     let text = d.text.as_ref();
+    let wrap_width = (width - d.margin * 2. - d.indent - d.tail).max(px(40.));
     let runs: Vec<RunInput> = d
         .spans
         .iter()
-        .map(|s| RunInput {
-            text: &text[s.range.clone()],
-            font: &s.font,
-            size: s.size,
-            color: s.color,
-            kern_after: s.kern_after,
-            box_size: s.math.as_ref().map(|m| match &m.rendered {
-                Some(r) => size(px(r.width), px(r.height)),
-                None => size(px(8.), px(8.)),
-            }),
+        .map(|s| {
+            // A picture stands on the baseline, with the line's descent below it.
+            let media_box = s.media.as_ref().map(|m| {
+                let g = m.geom(f32::from(wrap_width));
+                size(px(g.box_width), px(g.box_height) + descent)
+            });
+            RunInput {
+                text: &text[s.range.clone()],
+                font: &s.font,
+                size: s.size,
+                color: s.color,
+                kern_after: s.kern_after,
+                box_size: media_box.or(s.math.as_ref().map(|m| match &m.rendered {
+                    Some(r) => size(px(r.width), px(r.height)),
+                    None => size(px(8.), px(8.)),
+                })),
+                box_mode: match &s.media {
+                    Some(m) if m.fills_line => BoxMode::BaselineFill,
+                    Some(_) => BoxMode::Baseline,
+                    None => BoxMode::Centered,
+                },
+            }
         })
         .collect();
-    let wrap_width = (width - d.margin * 2. - d.indent - d.tail).max(px(40.));
     let hang = d.hang;
     let (natural, fixed, spacing) = match d.metric {
         LineMetric::Fixed(h) => (false, px(h), px(0.)),
         LineMetric::Natural { spacing } => (true, ascent + descent + px(spacing), px(spacing)),
     };
-    let _ = spacing;
     let laid = Laid::shape(
         text,
         &runs,
         |run_x| if hang > 0 { hang_x(d, run_x) } else { px(0.) },
         wrap_width,
         d.wrap,
-        |_, tallest| fixed.max(tallest),
+        |_, tallest| if tallest > px(0.) { fixed.max(tallest + spacing) } else { fixed },
         window,
     );
-    Rc::new(Shaped { laid, ascent, descent, natural })
+    Rc::new(Shaped { laid, ascent, descent, natural, column: wrap_width })
+}
+
+/// Where a box goes, within a line drawn from `text_origin`: its corner, and how
+/// it divides up.
+pub fn media_box(
+    shaped: &Shaped,
+    span_index: usize,
+    span: &Span,
+    media: &InlineMedia,
+    text_origin: Point<Pixels>,
+) -> (Point<Pixels>, media::MediaGeom) {
+    let geom = media.geom(f32::from(shaped.column));
+    let laid = &shaped.laid;
+    let row_ix = laid.row_holding(span.range.start);
+    let row = laid.rows[row_ix];
+    let base = text_origin.y + row.y + shaped.baseline(row_ix);
+    let x = text_origin.x + laid.run_x[span_index] - row.x0;
+    (point(x, base - px(geom.box_height)), geom)
+}
+
+/// A picture on the page: rounded and captioned if it's still, playing on if it
+/// isn't. Nothing is drawn but its place until its pixels arrive.
+fn paint_image_box(media: &InlineMedia, geom: media::MediaGeom, origin: Point<Pixels>, ui: &RefCell<VideoUi>, window: &mut Window, cx: &mut App) {
+    let MediaKind::Image { animated } = media.info.kind else { return };
+    let c = t();
+    let b = Bounds::new(origin, size(px(geom.width), px(geom.height)));
+    let radius = if animated { Corners::default() } else { Corners::all(px(media::IMAGE_RADIUS)) };
+    match media::with_store(|s| s.frame(&media.info.key)) {
+        Some((image, frame, left)) => {
+            let _ = window.paint_image(b, b, radius, image, frame, false);
+            if animated {
+                let ui = ui.borrow();
+                let due = std::time::Instant::now() + std::time::Duration::from_secs_f32(left.clamp(0.02, 60.));
+                if ui.next_frame.get().is_none_or(|at| due < at) {
+                    ui.next_frame.set(Some(due));
+                }
+            }
+        }
+        None => window.paint_quad(PaintQuad {
+            bounds: b,
+            corner_radii: radius,
+            background: c.quiet_surface.into(),
+            border_widths: Edges::default(),
+            border_color: transparent_black(),
+            border_style: BorderStyle::default(),
+        }),
+    }
+    if media.has_caption() {
+        video::paint_caption(
+            media.caption.trim(),
+            point(origin.x, origin.y + px(geom.height + media::CAPTION_GAP)),
+            px(geom.width),
+            TruncateFrom::End,
+            window,
+            cx,
+        );
+    }
 }
 
 /// Where the text starts after hung syntax.
@@ -126,6 +198,7 @@ pub struct LineEl {
     pub painted: Rc<RefCell<Vec<Painted>>>,
     pub shaped: Rc<RefCell<Option<(Pixels, Rc<Shaped>)>>>,
     pub symbols: Rc<RefCell<SymbolCache>>,
+    pub videos: Rc<RefCell<VideoUi>>,
 }
 
 impl IntoElement for LineEl {
@@ -364,7 +437,7 @@ impl Element for LineEl {
         // Math boxes.
         for (r, span) in d.spans.iter().enumerate() {
             let Some(rendered) = span.math.as_ref().and_then(|m| m.rendered.clone()) else { continue };
-            let row_ix = laid.row_of(span.range.start);
+            let row_ix = laid.row_holding(span.range.start);
             let row = laid.rows[row_ix];
             let base = top_y + row.y + shaped.baseline(row_ix);
             let x = text_x + laid.run_x[r] - row.x0;
@@ -380,6 +453,23 @@ impl Element for LineEl {
                 0,
                 false,
             );
+        }
+
+        // Images and videos.
+        for (r, span) in d.spans.iter().enumerate() {
+            let Some(media) = &span.media else { continue };
+            let (at, geom) = media_box(&shaped, r, span, media, origin);
+            match media.info.kind {
+                MediaKind::Image { .. } => paint_image_box(media, geom, at, &self.videos, window, cx),
+                MediaKind::Video { .. } => video::paint_video(self.line, media, geom, at, &self.videos, &self.symbols, window, cx),
+            }
+            // Selected along with the text around it.
+            if let Some((range, _)) = &self.selection
+                && range.start <= span.range.start
+                && range.end >= span.range.end
+            {
+                window.paint_quad(fill(Bounds::new(at, size(px(geom.width), px(geom.height))), c.selection));
+            }
         }
 
         // Text.

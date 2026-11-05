@@ -327,7 +327,95 @@ pub fn start(scenario: String, window: WindowHandle<Editor>, t0: Instant, read_m
     .detach();
 }
 
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGWindowListCreateImage(
+        bounds: cocoa::foundation::NSRect,
+        options: u32,
+        window: u32,
+        image: u32,
+    ) -> *mut std::ffi::c_void;
+    fn CGImageRelease(image: *mut std::ffi::c_void);
+}
+
+/// Saves this process's own window as a PNG, so a script can look at its result.
+fn self_shot(path: &str) -> bool {
+    unsafe {
+        let number: isize = msg_send![ns_window(), windowNumber];
+        let null = cocoa::foundation::NSRect::new(
+            NSPoint::new(f64::INFINITY, f64::INFINITY),
+            cocoa::foundation::NSSize::new(0., 0.),
+        );
+        // Including this window; ignoring its frame shadow.
+        let image = CGWindowListCreateImage(null, 8, number as u32, 1);
+        if image.is_null() {
+            return false;
+        }
+        let rep: id = msg_send![class!(NSBitmapImageRep), alloc];
+        let rep: id = msg_send![rep, initWithCGImage: image];
+        CGImageRelease(image);
+        let empty: id = msg_send![class!(NSDictionary), dictionary];
+        let png: id = msg_send![rep, representationUsingType: 4u64 properties: empty];
+        let saved: bool = msg_send![png, writeToFile: ns(path) atomically: true];
+        let _: () = msg_send![rep, release];
+        saved
+    }
+}
+
+fn post_mouse_move(x: f64, y: f64) {
+    unsafe {
+        let app: id = msg_send![class!(NSApplication), sharedApplication];
+        let number: isize = msg_send![ns_window(), windowNumber];
+        let at = NSPoint::new(x, fumi_ui::native::content_height() - y);
+        let ev: id = msg_send![class!(NSEvent),
+            mouseEventWithType: 5u64 location: at modifierFlags: 0u64 timestamp: 0f64
+            windowNumber: number context: nil eventNumber: 0isize clickCount: 0isize pressure: 0f32];
+        let _: () = msg_send![app, postEvent: ev atStart: false];
+    }
+}
+
+/// `FUMI_DRIVE=script FUMI_SCRIPT=file`: one step a line, for checking things on
+/// screen in a fixture. `click x y`, `move x y`, `drag x0 y0 x1 y1`, `scroll x y
+/// dy`, `key left|right|up|down|enter|backspace`, `type text`, `wait ms`, `shot
+/// file.png`, `state`.
+async fn run_script(window: WindowHandle<Editor>, cx: &mut AsyncApp) {
+    let path = std::env::var("FUMI_SCRIPT").unwrap_or_default();
+    let script = std::fs::read_to_string(&path).unwrap_or_default();
+    for line in script.lines() {
+        let (verb, rest) = line.split_once(' ').unwrap_or((line, ""));
+        let n: Vec<f64> = rest.split(' ').filter_map(|v| v.parse().ok()).collect();
+        match verb {
+            "click" => fumi_ui::native::post_click(n[0], n[1]),
+            "move" => post_mouse_move(n[0], n[1]),
+            "drag" => fumi_ui::native::post_mouse_drag(n[0], n[1], n[2], n[3]),
+            "scroll" => fumi_ui::native::scroll_at(n[0], n[1], n[2] as i32),
+            "wait" => sleep(cx, n[0] as u64).await,
+            "shot" => println!("SHOT {rest} {}", self_shot(rest)),
+            "key" => post(&match rest {
+                "left" => k_left(),
+                "right" => k_right(),
+                "up" => k_up(),
+                "down" => k_down(),
+                "enter" => k_enter(),
+                _ => k_backspace(),
+            }),
+            "type" => rest.chars().for_each(|c| post(&char_key(c))),
+            "state" => {
+                let state = window.update(cx, |e, _, cx| e.media_state(cx)).unwrap_or_default();
+                println!("STATE {state}");
+            }
+            _ => {}
+        }
+        // Lets the event through, and the frame it causes.
+        sleep(cx, 120).await;
+    }
+}
+
 async fn run(scenario: &str, window: WindowHandle<Editor>, cx: &mut AsyncApp) {
+    if scenario == "script" {
+        run_script(window, cx).await;
+        return;
+    }
     let before = window.update(cx, |e, _, _| e.doc.to_bytes()).unwrap();
     match scenario {
         "idle" => {

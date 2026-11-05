@@ -9,7 +9,11 @@ use crate::display::*;
 use fumi_core::doc::Doc;
 use crate::element::*;
 use fumi_core::markdown::*;
+use crate::media::{self, Lookup, MediaContext, MediaKind, MediaLookup};
 use crate::metrics;
+use crate::paste;
+use crate::video::{self, Control, VideoPlayer, VideoUi};
+use fumi_core::attachment_import;
 use gpui::prelude::*;
 use gpui::*;
 use std::cell::RefCell;
@@ -88,7 +92,6 @@ pub enum ItemKind {
     Line,
     Table,
     Math,
-    Image,
     Front,
 }
 
@@ -159,6 +162,31 @@ pub struct Editor {
     thumb_drag: Option<f32>,
     /// False when the doc was replaced from outside and has no unsaved change.
     pub dirty: bool,
+    /// The library this note is in: where relative paths and `![[embeds]]` are
+    /// also looked for, and where pasted media goes. None: media can't be pasted.
+    pub library: Option<PathBuf>,
+    /// Something finished loading since the last frame.
+    media_dirty: bool,
+    /// Lines drawn while something on them was still loading.
+    media_wait: Vec<usize>,
+    videos: Rc<RefCell<VideoUi>>,
+    video_drag: Option<VideoDrag>,
+    over_video: bool,
+    /// The moment the timer for the next animated-image frame is set for.
+    frame_timer: Rc<std::cell::Cell<Option<Instant>>>,
+}
+
+/// A press on one of a video's sliders, until it lets go.
+struct VideoDrag {
+    player: usize,
+    control: Control,
+    track: Bounds<Pixels>,
+}
+
+/// What a press on a picture means.
+enum MediaHit {
+    Image { caret: usize },
+    Video { line: usize, path: PathBuf, area: Bounds<Pixels> },
 }
 
 /// What the editor tells the screen around it.
@@ -252,7 +280,16 @@ impl Editor {
             thumb_hover: false,
             thumb_drag: None,
             dirty: false,
+            library: None,
+            media_dirty: false,
+            media_wait: Vec::new(),
+            videos: Rc::default(),
+            video_drag: None,
+            over_video: false,
+            frame_timer: Rc::default(),
         };
+        let weak = cx.weak_entity();
+        media::with_store(|s| s.add_listener(weak));
         this.load_bytes(bytes);
         if blink {
             cx.spawn(async move |this: WeakEntity<Editor>, cx| {
@@ -302,6 +339,9 @@ impl Editor {
         self.undo.clear();
         self.redo.clear();
         self.caret_line = 0;
+        self.videos.borrow_mut().players.clear();
+        self.media_wait.clear();
+        self.video_drag = None;
         self.revealed = self.foldable_block_at(0);
         self.items = build_items(&self.lines, self.revealed.as_ref());
         self.title_line = find_title(&self.lines);
@@ -325,7 +365,7 @@ impl Editor {
         let is_table = |k: Kind| matches!(k, Kind::TableHead | Kind::TableDelim | Kind::TableRow);
         let is_math = |k: Kind| matches!(k, Kind::MathOpen | Kind::MathBody | Kind::MathClose);
         match kind {
-            Kind::Image | Kind::MathOne => Some(line..line + 1),
+            Kind::MathOne => Some(line..line + 1),
             // Offset 0 keeps the panel; it opens only from inside.
             Kind::FrontOpen | Kind::FrontBody | Kind::FrontClose if self.head == 0 => None,
             Kind::FrontOpen | Kind::FrontBody | Kind::FrontClose => {
@@ -484,6 +524,7 @@ impl Editor {
         metrics::note_change();
         let line = self.doc.line_of(self.head);
         let prev = self.caret_line;
+        self.close_revealed_players(line);
         let block = self.foldable_block_at(line);
         if block != self.revealed {
             self.revealed = block;
@@ -561,6 +602,7 @@ impl Editor {
         self.doc.replace(range.clone(), text);
         let added = text.bytes().filter(|b| *b == b'\n').count();
         let changed = self.rescan(first, removed, added, sensitive);
+        self.media_lines_moved(first, removed, added);
 
         let caret = range.start + text.len();
         self.anchor = caret;
@@ -774,6 +816,7 @@ impl Editor {
         self.doc.replace(at..at + old_len, text);
         let added = text.bytes().filter(|b| *b == b'\n').count();
         let changed = self.rescan(first, removed, added, sensitive);
+        self.media_lines_moved(first, removed, added);
         self.anchor = sel.0;
         self.head = sel.1;
         self.marked = None;
@@ -924,6 +967,12 @@ impl Editor {
     }
 
     fn set_head(&mut self, head: usize, extend: bool, keep_goal: bool) {
+        // Up into the properties panel opens it for editing, rather than leaving
+        // the caret at its foot.
+        if head == 0 && !extend && self.head != 0 && self.has_folded_panel() {
+            self.open_frontmatter();
+            return;
+        }
         self.head = head;
         if !extend {
             self.anchor = head;
@@ -957,10 +1006,15 @@ impl Editor {
         let x = self.goal_x.unwrap_or(d.indent + s.x_of(disp, row));
         self.goal_x = Some(x);
 
-        let target = if down && row + 1 < s.row_count() {
-            start + d.disp_to_src(s.index_at(row + 1, x - d.indent))
-        } else if !down && row > 0 {
-            start + d.disp_to_src(s.index_at(row - 1, x - d.indent))
+        // A revealed image has a row of its own and no text to land on: arrows
+        // pass over it, to the next text or the next line.
+        let rows = &s.laid.rows;
+        let mut next_row = if down { row + 1 } else { row.wrapping_sub(1) };
+        while rows.get(next_row).is_some_and(|r| r.fill) {
+            next_row = if down { next_row + 1 } else { next_row.wrapping_sub(1) };
+        }
+        let target = if next_row < s.row_count() {
+            start + d.disp_to_src(s.index_at(next_row, x - d.indent))
         } else if down && line + 1 >= self.doc.line_count() {
             self.doc.len()
         } else if !down && line == 0 {
@@ -968,7 +1022,9 @@ impl Editor {
         } else {
             let next = if down { line + 1 } else { line - 1 };
             let item = self.items[self.item_of(next)];
-            if item.kind != ItemKind::Line {
+            if item.kind == ItemKind::Front {
+                0
+            } else if item.kind != ItemKind::Line {
                 // A folded block opens on the near line, source visible.
                 self.doc.line_start(next)
             } else {
@@ -1063,9 +1119,78 @@ impl Editor {
     }
 
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
+        if self.paste_media(cx) {
+            return;
+        }
         if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
             self.replace_selection(&text, false, cx);
         }
+    }
+
+    /// Files that are images or videos, or else image data, become embeds.
+    fn paste_media(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(library) = self.library.clone() else { return false };
+        let board = paste::read_general();
+        let imported: Vec<PathBuf> = if board.has_files {
+            board
+                .files
+                .iter()
+                .filter(|f| attachment_import::is_media(f))
+                .filter_map(|f| attachment_import::import_file(f, &library).ok())
+                .collect()
+        } else if let Some((data, ext)) = board.image {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0., |d| d.as_secs_f64());
+            attachment_import::save_image(&data, ext, &library, now, paste::utc_offset(now as i64))
+                .into_iter()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.insert_imported(&imported, self.selection(), cx)
+    }
+
+    /// Links files now in the library, each on a line of its own.
+    fn insert_imported(&mut self, imported: &[PathBuf], range: Range<usize>, cx: &mut Context<Self>) -> bool {
+        let Some(library) = &self.library else { return false };
+        if imported.is_empty() {
+            return false;
+        }
+        let folder = if self.dir.as_os_str().is_empty() { library.clone() } else { self.dir.clone() };
+        let links: Vec<String> = imported
+            .iter()
+            .map(|file| attachment_import::markdown_for_path(&attachment_import::relative_path(&folder, file)))
+            .collect();
+        let before = (range.start > 0)
+            .then(|| self.doc.slice(self.prev_boundary(range.start)..range.start).bytes().last())
+            .flatten();
+        let after = (range.end < self.doc.len())
+            .then(|| self.doc.slice(range.end..self.next_boundary(range.end)).bytes().next())
+            .flatten();
+        let text = paste::embed_text(&links, before, after);
+        self.edit(range, &text, false, false);
+        self.schedule_after_edit(cx);
+        cx.notify();
+        true
+    }
+
+    /// Image and video files dropped on the page go in at the character nearest
+    /// the pointer; other drags have nothing to do here.
+    fn drop_files(&mut self, paths: &ExternalPaths, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(library) = self.library.clone() else { return };
+        let imported: Vec<PathBuf> = paths
+            .paths()
+            .iter()
+            .filter(|f| attachment_import::is_media(f))
+            .filter_map(|f| attachment_import::import_file(f, &library).ok())
+            .collect();
+        if imported.is_empty() {
+            return;
+        }
+        let at = self.hit_test(window.mouse_position());
+        window.focus(&self.focus, cx);
+        self.insert_imported(&imported, at..at, cx);
     }
 
     fn save(&mut self, _: &Save, _: &mut Window, cx: &mut Context<Self>) {
@@ -1088,6 +1213,13 @@ impl Editor {
         let Some(item) = hit else { return self.head };
         let start = self.doc.line_start(item.first_line);
         match &item.text {
+            // A block's right half is its trailing edge, as a caret placed
+            // beside an attachment has it.
+            None if self.items[self.item_of(item.first_line)].kind != ItemKind::Front
+                && p.x > item.bounds.center().x =>
+            {
+                self.doc.line_end(item.first_line + item.n_lines - 1)
+            }
             None => start,
             Some((d, s)) => {
                 let row = s.row_at(p.y - item.bounds.top() - d.top);
@@ -1182,7 +1314,29 @@ impl Editor {
                 return;
             }
         }
+        if let Some(hit) = self.media_at(e.position) {
+            match hit {
+                MediaHit::Video { line, path, area } => {
+                    self.press_video(line, &path, area, e.position);
+                    cx.notify();
+                    return;
+                }
+                // Not selected: the caret goes to the end of its source, which
+                // shows the source above it.
+                MediaHit::Image { caret } if e.click_count == 1 && !e.modifiers.shift => {
+                    self.set_head_from_mouse(caret, false);
+                    cx.notify();
+                    return;
+                }
+                MediaHit::Image { .. } => {}
+            }
+        }
         let at = self.hit_test(e.position);
+        if at == 0 && e.click_count == 1 && !e.modifiers.shift && self.has_folded_panel() {
+            self.open_frontmatter();
+            cx.notify();
+            return;
+        }
         let line = self.doc.line_of(at);
         match e.click_count {
             2 => {
@@ -1212,6 +1366,14 @@ impl Editor {
     }
 
     fn mouse_move(&mut self, e: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.video_drag.is_some() {
+            if e.pressed_button == Some(MouseButton::Left) {
+                self.drag_video(e.position, false);
+                cx.notify();
+            }
+            return;
+        }
+        self.track_video_pointer(e.position, cx);
         if let Some(pending) = &self.pending_link {
             // Dragging off a link selects instead of opening.
             let moved = e.position - pending.at;
@@ -1256,8 +1418,13 @@ impl Editor {
         }
     }
 
-    fn mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn mouse_up(&mut self, e: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.selecting = false;
+        if self.video_drag.is_some() {
+            self.drag_video(e.position, true);
+            self.video_drag = None;
+            cx.notify();
+        }
         if let Some(pending) = self.pending_link.take() {
             match pending.link {
                 Link::Web(address) => {
@@ -1331,6 +1498,7 @@ impl Editor {
             _ => info.real,
         };
         let kind_at = |l: Option<usize>| l.and_then(|l| self.lines.get(l)).map_or(Kind::Blank, |i| i.kind);
+        let media = text.contains("![").then(|| self.media_context());
         let mut d = build_line(
             &text,
             &LineCtx {
@@ -1346,6 +1514,8 @@ impl Editor {
                 real,
                 raw_block: false,
                 prev_has_caret: line > 0 && self.caret_line == line - 1,
+                media: media.as_ref().map(|m| m as &dyn MediaLookup),
+                reveal_media: media.is_some() && (self.selection_is_empty() || self.doc.line_of(self.anchor) == line),
             },
         );
         d.margin = self.margin;
@@ -1392,11 +1562,12 @@ impl Editor {
                 .as_ref()
                 .filter(|(l, _)| *l == line)
                 .map(|(_, r)| r.clone());
-            let image_below = (reveal && self.lines[line].kind == Kind::Image).then(|| {
-                let src = self.doc.line_text(line);
-                let img = blocks::image(&src, &self.dir, self.text_width, &mut self.blocks);
-                div().w_full().px(self.margin).child(img)
-            });
+            if display.media_pending && !self.media_wait.contains(&line) {
+                self.media_wait.push(line);
+            }
+            if media::with_store(|s| s.has_queued()) {
+                media::pump(cx);
+            }
             let element = LineEl {
                 line,
                 display,
@@ -1408,13 +1579,9 @@ impl Editor {
                 painted: self.painted.clone(),
                 shaped: Rc::new(RefCell::new(None)),
                 symbols: self.symbols.clone(),
+                videos: self.videos.clone(),
             };
-            // An image stays on the page under its source, as in Fumi, so
-            // clicking one doesn't pull everything below it upward.
-            return match image_below {
-                Some(image) => div().w_full().child(element).child(image).into_any_element(),
-                None => element.into_any_element(),
-            };
+            return element.into_any_element();
         }
 
         let range = line..line + item.len as usize;
@@ -1423,7 +1590,6 @@ impl Editor {
             ItemKind::Table => blocks::table(&src, self.text_width, &self.typo, &mut self.blocks, window, cx),
             ItemKind::Math => blocks::math(&src, self.text_width, &self.typo, &mut self.blocks, window),
             ItemKind::Front => blocks::frontmatter(&src, self.text_width, &self.typo, window, cx),
-            ItemKind::Image => blocks::image(&src, &self.dir, self.text_width, &mut self.blocks),
             ItemKind::Line => unreachable!(),
         };
         let sel = self.selection();
@@ -1471,6 +1637,14 @@ impl Focusable for Editor {
 impl Render for Editor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         metrics::frame_begin();
+        if std::mem::take(&mut self.media_dirty) {
+            self.settle_media(window);
+        }
+        {
+            let ui = self.videos.borrow();
+            ui.live.set(false);
+            ui.next_frame.set(None);
+        }
         self.last_shown = self.painted.borrow().len();
         self.painted.borrow_mut().clear();
         let vw = self.pane_width.unwrap_or(window.viewport_size().width);
@@ -1499,7 +1673,14 @@ impl Render for Editor {
             .bg(t().page_content)
             .text_color(t().text)
             .font(self.typo.body())
-            .cursor(if self.hovered_link.is_some() { CursorStyle::PointingHand } else { CursorStyle::IBeam });
+            .cursor(if self.hovered_link.is_some() {
+                CursorStyle::PointingHand
+            } else if self.over_video {
+                CursorStyle::Arrow
+            } else {
+                CursorStyle::IBeam
+            })
+            .on_drop(cx.listener(Self::drop_files));
         let root = self.register_actions(root, cx);
         self.was_focused = self.focus.is_focused(window);
         self.note_scroll(window, cx);
@@ -1508,6 +1689,8 @@ impl Render for Editor {
         let focus = self.focus.clone();
         let thumb = self.scroll_thumb();
         let status = self.show_status.then(|| self.status_text());
+        let videos = self.videos.clone();
+        let frame_timer = self.frame_timer.clone();
         root.on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
             .on_mouse_move(cx.listener(Self::mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
@@ -1567,12 +1750,353 @@ impl Render for Editor {
                             ElementInputHandler::new(bounds, entity.clone()),
                             cx,
                         );
+                        if media::with_store(|s| s.has_queued()) {
+                            media::pump(cx);
+                        }
+                        media_clock(&videos, &frame_timer, &entity, window, cx);
                         metrics::frame_end();
                     },
                 )
                 .absolute()
                 .size_full(),
             )
+    }
+}
+
+/// Keeps animated things going, and only those that were just drawn: a video
+/// playing on screen asks for the next frame, an animated image for a timer.
+fn media_clock(
+    videos: &Rc<RefCell<VideoUi>>,
+    frame_timer: &Rc<std::cell::Cell<Option<Instant>>>,
+    entity: &Entity<Editor>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let ui = videos.borrow();
+    if ui.live.get() {
+        let weak = entity.downgrade();
+        window.on_next_frame(move |_, cx| {
+            let _ = weak.update(cx, |_, cx| cx.notify());
+        });
+    }
+    let Some(due) = ui.next_frame.get() else { return };
+    let now = Instant::now();
+    if frame_timer.get().is_some_and(|set| set > now && set <= due) {
+        return;
+    }
+    frame_timer.set(Some(due));
+    let weak = entity.downgrade();
+    let timer = frame_timer.clone();
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        cx.background_executor().timer(due.saturating_duration_since(now)).await;
+        if timer.get() == Some(due) {
+            timer.set(None);
+            let _ = weak.update(cx, |_, cx| cx.notify());
+        }
+    })
+    .detach();
+}
+
+// Media -----------------------------------------------------------------------
+
+impl Editor {
+    fn media_context(&self) -> MediaContext {
+        MediaContext {
+            base: (!self.dir.as_os_str().is_empty()).then(|| self.dir.clone()),
+            workspace: self.library.clone(),
+        }
+    }
+
+    /// The store has something new; takes effect on the next frame, however many
+    /// arrive before it.
+    pub fn media_changed(&mut self, cx: &mut Context<Self>) {
+        self.media_dirty = true;
+        cx.notify();
+    }
+
+    /// Lines that were waiting and aren't any more change height now. Text above
+    /// the fold doesn't move: if the change happens above the caret's line while
+    /// that's in view, or to something partly scrolled past, the page goes along.
+    fn settle_media(&mut self, window: &Window) {
+        let waiting = std::mem::take(&mut self.media_wait);
+        let mut done = Vec::new();
+        for line in waiting {
+            if line >= self.lines.len() {
+                continue;
+            }
+            if self.display_of(line, None).media_pending {
+                self.media_wait.push(line);
+            } else {
+                done.push(line);
+            }
+        }
+        if done.is_empty() {
+            return;
+        }
+        let painted = self.painted.clone();
+        let painted = painted.borrow();
+        let view = self.list.viewport_bounds();
+        let caret_top = painted
+            .iter()
+            .find(|p| self.caret_line >= p.first_line && self.caret_line < p.first_line + p.n_lines)
+            .map(|p| p.bounds.top())
+            .filter(|top| *top >= view.top() && *top < view.bottom());
+        let mut shift = px(0.);
+        let mut heights = Vec::with_capacity(painted.len());
+        for p in painted.iter() {
+            let mut height = p.bounds.size.height;
+            if done.contains(&p.first_line) {
+                let caret = (p.first_line == self.caret_line).then(|| self.head - self.doc.line_start(p.first_line));
+                let mut d = self.display_of(p.first_line, caret);
+                self.fill_math(&mut d, window);
+                let new_height = shape(&d, self.list_width, window).height(&d);
+                let above_caret = caret_top.is_some_and(|top| p.bounds.top() < top);
+                if above_caret || p.bounds.top() < view.top() {
+                    shift += new_height - height;
+                }
+                height = new_height;
+            }
+            heights.push((self.item_of(p.first_line), height));
+        }
+        for line in &done {
+            self.remeasure_lines(*line..*line + 1);
+        }
+        if shift != px(0.) {
+            let top = self.list.logical_scroll_top();
+            let mut rest = top.offset_in_item + shift;
+            let mut item_ix = top.item_ix;
+            for (ix, height) in heights.iter().filter(|(ix, _)| *ix >= top.item_ix) {
+                if rest < *height {
+                    break;
+                }
+                rest -= *height;
+                item_ix = ix + 1;
+            }
+            self.list.scroll_to(ListOffset { item_ix, offset_in_item: rest.max(px(0.)) });
+        }
+    }
+
+    /// Keeps line numbers right through an edit, and players on their cards. One
+    /// whose card is gone stops.
+    fn media_lines_moved(&mut self, first: usize, removed: usize, added: usize) {
+        let moved = |line: usize| line + added - removed;
+        let last = first + removed;
+        self.media_wait.retain_mut(|line| {
+            if *line > last {
+                *line = moved(*line);
+            }
+            *line < first || *line > first + added
+        });
+        let videos = self.videos.clone();
+        let mut ui = videos.borrow_mut();
+        if ui.players.is_empty() {
+            return;
+        }
+        let players = std::mem::take(&mut ui.players);
+        for mut player in players {
+            if player.line > last {
+                player.line = moved(player.line);
+            } else if player.line >= first {
+                match (first..=first + added).find(|line| self.line_shows_video(*line, &player.path)) {
+                    Some(line) => player.line = line,
+                    None => continue,
+                }
+            }
+            ui.players.push(player);
+        }
+        ui.hovered = None;
+        self.video_drag = None;
+    }
+
+    fn video_in(&self, dest: &str, embed: bool) -> Option<PathBuf> {
+        match self.media_context().lookup(dest, embed) {
+            Lookup::Ready(info) => match info.kind {
+                MediaKind::Video { path } => Some(path),
+                MediaKind::Image { .. } => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn line_shows_video(&self, line: usize, path: &std::path::Path) -> bool {
+        let text = self.doc.line_text(line);
+        crate::display::media_spans(&text)
+            .iter()
+            .any(|m| self.video_in(&m.dest, m.embed).is_some_and(|p| p == path))
+    }
+
+    /// A card whose source the caret has opened closes its player.
+    fn close_revealed_players(&mut self, line: usize) {
+        if !self.selection_is_empty() {
+            return;
+        }
+        let videos = self.videos.clone();
+        let mut ui = videos.borrow_mut();
+        if ui.players.iter().all(|p| p.line != line) {
+            return;
+        }
+        let text = self.doc.line_text(line);
+        let caret = self.head - self.doc.line_start(line);
+        for span in crate::display::media_spans(&text) {
+            if caret >= span.range.start
+                && caret <= span.range.end
+                && let Some(path) = self.video_in(&span.dest, span.embed)
+            {
+                ui.players.retain(|p| p.line != line || p.path != path);
+                ui.hovered = None;
+                self.video_drag = None;
+            }
+        }
+    }
+
+    fn media_at(&self, p: Point<Pixels>) -> Option<MediaHit> {
+        let painted = self.painted.borrow();
+        let item = painted.iter().find(|i| p.y >= i.bounds.top() && p.y < i.bounds.bottom())?;
+        let (d, s) = item.text.as_ref()?;
+        let origin = point(item.bounds.left() + d.margin + d.indent, item.bounds.top() + d.top);
+        for (r, span) in d.spans.iter().enumerate() {
+            let Some(media) = &span.media else { continue };
+            let (at, geom) = media_box(s, r, span, media, origin);
+            match &media.info.kind {
+                MediaKind::Video { path } => {
+                    // Not the caption under it.
+                    let area = Bounds::new(at, size(px(geom.width), px(geom.height)));
+                    if area.contains(&p) {
+                        return Some(MediaHit::Video { line: item.first_line, path: path.clone(), area });
+                    }
+                }
+                MediaKind::Image { .. } => {
+                    let area = Bounds::new(at, size(px(geom.box_width), px(geom.box_height)));
+                    if area.contains(&p) {
+                        return Some(MediaHit::Image { caret: self.doc.line_start(item.first_line) + media.src.end });
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// A press on a poster opens the player; on an open player, it's for the
+    /// controls, or else plays or pauses.
+    fn press_video(&mut self, line: usize, path: &std::path::Path, area: Bounds<Pixels>, p: Point<Pixels>) {
+        let videos = self.videos.clone();
+        let mut ui = videos.borrow_mut();
+        ui.moved_at = Instant::now();
+        let Some(index) = ui.player_on(line, path) else {
+            let turned = media::with_store(|s| s.video_info(path)).is_some_and(|i| i.turned);
+            if let Some(player) = VideoPlayer::start(line, path, turned) {
+                ui.players.push(player);
+                ui.hovered = Some(ui.players.len() - 1);
+            }
+            return;
+        };
+        ui.hovered = Some(index);
+        let visible = ui.controls_visible(index);
+        let player = &mut ui.players[index];
+        let layout = video::controls_layout(area, player.duration() >= 3600.);
+        match visible.then(|| layout.control_at(p)).flatten() {
+            Some(Control::PlayPause) => player.toggle(),
+            Some(Control::Sound) => player.toggle_muted(),
+            Some(Control::FullScreen) => player.enter_full_screen(),
+            Some(control @ Control::Scrubber) => {
+                player.resume = Some(player.is_playing());
+                player.pause();
+                self.video_drag = Some(VideoDrag { player: index, control, track: layout.track });
+                drop(ui);
+                self.drag_video(p, false);
+            }
+            Some(control @ Control::Volume) => {
+                self.video_drag = Some(VideoDrag { player: index, control, track: layout.volume.unwrap_or(layout.track) });
+                drop(ui);
+                self.drag_video(p, false);
+            }
+            // Clicks on the bar between its controls do nothing.
+            None if visible && layout.bar.contains(&p) => {}
+            None => player.toggle(),
+        }
+    }
+
+    fn drag_video(&mut self, p: Point<Pixels>, finished: bool) {
+        let Some(drag) = &self.video_drag else { return };
+        let videos = self.videos.clone();
+        let mut ui = videos.borrow_mut();
+        ui.moved_at = Instant::now();
+        let Some(player) = ui.players.get_mut(drag.player) else { return };
+        let fraction = video::fraction_along(drag.track, p.x);
+        match drag.control {
+            Control::Scrubber => {
+                player.seek(player.duration() * fraction as f64, finished);
+                if finished {
+                    if player.resume.take() == Some(true) {
+                        player.play();
+                    }
+                }
+            }
+            Control::Volume => player.set_volume(fraction),
+            _ => {}
+        }
+    }
+
+    /// A video's controls come up while the pointer moves over it.
+    fn track_video_pointer(&mut self, p: Point<Pixels>, cx: &mut Context<Self>) {
+        let hit = self.media_at(p);
+        let over = matches!(hit, Some(MediaHit::Video { .. }));
+        let videos = self.videos.clone();
+        let mut ui = videos.borrow_mut();
+        let hovered = match &hit {
+            Some(MediaHit::Video { line, path, .. }) => ui.player_on(*line, path),
+            _ => None,
+        };
+        let changed = hovered != ui.hovered || over != self.over_video;
+        if hovered.is_some() {
+            ui.moved_at = Instant::now();
+        }
+        ui.hovered = hovered;
+        self.over_video = over;
+        if changed || hovered.is_some() {
+            cx.notify();
+        }
+    }
+
+    /// For scripts checking a fixture: where things stand.
+    pub fn media_state(&self, _: &App) -> String {
+        let ui = self.videos.borrow();
+        let top = self.list.logical_scroll_top();
+        let players: Vec<String> = ui
+            .players
+            .iter()
+            .map(|p| format!("line={} playing={} t={:.2}/{:.2} muted={} vol={:.2}", p.line, p.is_playing(), p.time(), p.duration(), p.is_muted(), p.volume()))
+            .collect();
+        let painted: Vec<String> = self
+            .painted
+            .borrow()
+            .iter()
+            .map(|i| format!("{}@{:.0}+{:.0}", i.first_line, f32::from(i.bounds.top()), f32::from(i.bounds.size.height)))
+            .collect();
+        format!(
+            "head={} anchor={} caret_line={} top=({},{:.1}) items={} panel={} players={players:?} painted={painted:?}",
+            self.head,
+            self.anchor,
+            self.caret_line,
+            top.item_ix,
+            f32::from(top.offset_in_item),
+            self.items.len(),
+            self.has_folded_panel(),
+        )
+    }
+
+    fn has_folded_panel(&self) -> bool {
+        self.items.first().is_some_and(|i| i.kind == ItemKind::Front)
+    }
+
+    /// Shows the frontmatter as its source, the caret at the end of the last
+    /// property, ready to edit. The panel is the top of the note, so the page
+    /// stays where it is.
+    fn open_frontmatter(&mut self) {
+        let Some(first) = self.items.first().filter(|i| i.kind == ItemKind::Front) else { return };
+        let close = (first.start + first.len - 1) as usize;
+        let at = self.doc.line_end(close.saturating_sub(1));
+        self.set_head_from_mouse(at, false);
     }
 }
 
@@ -1810,7 +2334,6 @@ pub fn build_items(lines: &[LineInfo], revealed: Option<&Range<usize>>) -> Vec<I
                 let close = lines[i..].iter().position(|l| l.kind == Kind::FrontClose);
                 close.map(|c| (c + 1, ItemKind::Front))
             }
-            Kind::Image => Some((1, ItemKind::Image)),
             Kind::MathOne => Some((1, ItemKind::Math)),
             Kind::TableHead => {
                 let mut n = 1;
@@ -1853,7 +2376,7 @@ mod tests {
         assert_eq!(lines.len(), DOC.split('\n').count());
         let items = build_items(&lines, None);
         let kinds: Vec<ItemKind> = items.iter().map(|i| i.kind).filter(|k| *k != ItemKind::Line).collect();
-        assert_eq!(kinds, [ItemKind::Front, ItemKind::Table, ItemKind::Math, ItemKind::Image]);
+        assert_eq!(kinds, [ItemKind::Front, ItemKind::Table, ItemKind::Math]);
         let covered: u32 = items.iter().map(|i| i.len).sum();
         assert_eq!(covered as usize, lines.len());
     }

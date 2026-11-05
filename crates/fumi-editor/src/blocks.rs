@@ -1,7 +1,6 @@
-//! Blocks drawn in place of their source: a table grid, typeset math, an image,
-//! the frontmatter panel. Each renders from the lines it covers and never
-//! writes back. Ports of `TableAttachment`, `MathAttachment`, `ImageAttachment`
-//! and `FrontmatterAttachment`.
+//! Blocks drawn in place of their source: a table grid, typeset math, the
+//! frontmatter panel. Each renders from the lines it covers and never writes
+//! back. Ports of `TableAttachment`, `MathAttachment` and `FrontmatterAttachment`.
 
 use crate::display::*;
 use crate::textlayout::*;
@@ -13,14 +12,12 @@ use gpui::*;
 use ratex_gpui::render::{Rendered, render_latex};
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::path::Path;
 use std::rc::Rc;
 
 #[derive(Default)]
 pub struct BlockCache {
     tables: HashMap<u64, Rc<TableModel>>,
     math: HashMap<u64, Option<Rc<Rendered>>>,
-    images: HashMap<String, Option<(f32, f32)>>,
 }
 
 impl BlockCache {
@@ -89,6 +86,7 @@ fn shape_cell(cell: &Cell, width: Pixels, window: &Window) -> Laid {
             color: s.color,
             kern_after: s.kern_after,
             box_size: None,
+            box_mode: BoxMode::Centered,
         })
         .collect();
     Laid::shape(text, &runs, |_| px(0.), width, true, |_, _| px(19.), window)
@@ -317,49 +315,6 @@ pub fn math(
             .font(mono_font())
             .text_color(c.text3)
             .child(src.to_string())
-            .into_any_element(),
-    }
-}
-
-// Images ---------------------------------------------------------------------
-
-pub fn image(src: &str, dir: &Path, available: Pixels, cache: &mut BlockCache) -> AnyElement {
-    let c = t();
-    let target = image_target(src).unwrap_or("");
-    let path = if target.contains("://") { None } else { Some(dir.join(target)) };
-    let dims = cache
-        .images
-        .entry(target.to_string())
-        .or_insert_with(|| {
-            path.as_ref()
-                .and_then(|p| image::image_dimensions(p).ok())
-                .map(|(w, h)| (w as f32, h as f32))
-        })
-        .to_owned();
-    match (path, dims) {
-        (Some(path), Some((w, h))) => {
-            // Images fill the column at most; the height is known before
-            // decoding, so the list's measurement never changes under it.
-            let maxw = f32::from(available);
-            let scale = (maxw / w).min(1.);
-            div()
-                .w_full()
-                .py(px(8.))
-                .child(
-                    img(path)
-                        .w(px(w * scale))
-                        .h(px(h * scale))
-                        .rounded(px(8.))
-                        .object_fit(ObjectFit::Contain),
-                )
-                .into_any_element()
-        }
-        _ => div()
-            .w_full()
-            .py(px(8.))
-            .text_size(px(13.))
-            .text_color(c.marker)
-            .child(format!("Image not found: {target}"))
             .into_any_element(),
     }
 }
