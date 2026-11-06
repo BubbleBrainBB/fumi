@@ -21,6 +21,12 @@ static LAUNCHED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 
 fn main() {
     let t0 = *LAUNCHED.get_or_init(Instant::now);
+    // gpui-fast spike: scroll layers make typing in the editor's list slower
+    // (docs/spikes/gpui-fast.md), so they're off unless the environment says otherwise.
+    // Set before any thread starts and before GPUI reads it as a window opens.
+    if std::env::var_os("GPUI_SCROLL_LAYERS").is_none() {
+        unsafe { std::env::set_var("GPUI_SCROLL_LAYERS", "0") };
+    }
     metrics::now();
     match std::env::var("FUMI_DRIVE").ok() {
         Some(scenario) => run_bare_editor(Some(scenario), t0),
