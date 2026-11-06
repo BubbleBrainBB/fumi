@@ -5,7 +5,7 @@ edition = "2024"
 license = "MIT"
 
 [dependencies]
-gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false }
+gpui = { package = "gpui-fast", version = "=0.1.13", default-features = false }
 objc = "0.2"
 block = "0.1"
 cocoa = "0.26"

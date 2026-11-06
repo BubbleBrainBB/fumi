@@ -17,8 +17,8 @@ fumi-toolbar = { path = "crates/fumi-toolbar" }
 fumi-settings = { path = "crates/fumi-settings" }
 fumi-memos = { path = "crates/fumi-memos" }
 fumi-publish = { path = "crates/fumi-publish" }
-gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false }
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", default-features = false, features = ["font-kit", "runtime_shaders"] }
+gpui = { package = "gpui-fast", version = "=0.1.13", default-features = false }
+gpui_platform = { package = "gpui-fast-platform", version = "=0.1.13", default-features = false, features = ["font-kit", "runtime_shaders"] }
 objc = "0.2"
 cocoa = "0.26"
 libc = "0.2"
@@ -31,3 +31,7 @@ incremental = false
 # Three lines changed; drop this patch on Rust 1.99.
 [patch.crates-io]
 gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
+# gpui-fast spike: ratex-gpui asks for gpui-pre; give it gpui-fast instead.
+gpui-pre = { path = "vendor/gpui-fast-compat/gpui-pre" }
+# gpui-fast-macos 0.1.13 has the same three map_or_default calls.
+gpui-fast-macos = { path = "vendor/gpui-fast-macos" }

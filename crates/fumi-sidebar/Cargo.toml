@@ -8,8 +8,8 @@ license = "MIT"
 fumi-core = { path = "../fumi-core" }
 fumi-ui = { path = "../fumi-ui" }
 fumi-workspace = { path = "../fumi-workspace" }
-gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false }
+gpui = { package = "gpui-fast", version = "=0.1.13", default-features = false }
 smallvec = "1"
 
 [dev-dependencies]
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", default-features = false, features = ["font-kit", "runtime_shaders"] }
+gpui_platform = { package = "gpui-fast-platform", version = "=0.1.13", default-features = false, features = ["font-kit", "runtime_shaders"] }

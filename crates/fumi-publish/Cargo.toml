@@ -10,7 +10,7 @@ fumi-ui = { path = "../fumi-ui" }
 fumi-workspace = { path = "../fumi-workspace" }
 fumi-editor = { path = "../fumi-editor" }
 fumi-toolbar = { path = "../fumi-toolbar" }
-gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false }
+gpui = { package = "gpui-fast", version = "=0.1.13", default-features = false }
 ratex-gpui = { version = "0.4", default-features = false }
 smallvec = "1"
 objc = "0.2"
@@ -25,4 +25,4 @@ serde_json = "1"
 unicode-segmentation = "1"
 
 [dev-dependencies]
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", default-features = false, features = ["font-kit", "runtime_shaders"] }
+gpui_platform = { package = "gpui-fast-platform", version = "=0.1.13", default-features = false, features = ["font-kit", "runtime_shaders"] }
