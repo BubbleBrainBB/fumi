@@ -2,6 +2,7 @@
 #![allow(unexpected_cfgs)]
 
 pub mod anim;
+pub mod button;
 #[allow(deprecated)]
 pub mod native;
 #[allow(deprecated)]

@@ -361,40 +361,14 @@ pub(crate) fn stroke_stateful(mut el: Stateful<Div>, width: f32, color: Hsla) ->
     el
 }
 
-/// Settings' plain button: Cancel and Save under a memo being edited.
+/// The plain bordered button: Cancel and Save under a memo being edited.
 fn settings_button(id: String, title: &'static str) -> Stateful<Div> {
-    let c = t();
-    let (fill, hover, edge) = if c.dark {
-        (hsla(0., 0., 1., 0.12), hsla(0., 0., 1., 0.16), hsla(0., 0., 1., 0.08))
-    } else {
-        (white(), c.quiet_surface, hsla(0., 0., 0., 0.12))
-    };
-    stroke_stateful(
-        div()
-            .id(SharedString::from(id))
-            .h(px(26.))
-            .px(px(12.))
-            .flex()
-            .items_center()
-            .rounded(px(7.))
-            .bg(fill)
-            .hover(move |s| s.bg(hover))
-            .cursor_pointer()
-            .shadow(vec![BoxShadow {
-                color: hsla(0., 0., 0., 0.05),
-                offset: point(px(0.), px(1.)),
-                blur_radius: px(2.),
-                spread_radius: px(0.),
-                inset: false,
-            }])
-            .font(typo::ui(FontWeight::NORMAL))
-            .text_size(px(12.))
-            .line_height(line_box(12.))
-            .text_color(c.text)
-            .child(title),
-        0.5,
-        edge,
-    )
+    fumi_ui::button::bordered(SharedString::from(id))
+        .cursor_pointer()
+        .font(typo::ui(FontWeight::NORMAL))
+        .text_size(px(12.))
+        .line_height(line_box(12.))
+        .child(title)
 }
 
 #[cfg(test)]

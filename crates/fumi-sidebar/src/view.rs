@@ -766,22 +766,9 @@ impl SidebarView {
         let size = window.viewport_size();
         let cancellable = dialog.field.is_some();
         let button = |id: &'static str, label: SharedString, primary: bool| {
-            div()
-                .id(id)
+            if primary { fumi_ui::button::prominent(id) } else { fumi_ui::button::bordered(id) }
                 .flex_1()
-                .h(px(24.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(6.))
                 .text_size(px(13.))
-                .map(|el| {
-                    if primary {
-                        el.bg(c.accent).text_color(white()).font_weight(FontWeight::MEDIUM)
-                    } else {
-                        el.bg(c.quiet_surface).border_1().border_color(c.control_border).text_color(c.text)
-                    }
-                })
                 .child(label)
         };
         let buttons = div()

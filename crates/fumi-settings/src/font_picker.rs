@@ -2,7 +2,7 @@
 //! list: `FontPicker` in `SettingsView.swift`.
 
 use crate::anim::Fades;
-use crate::controls::{Probes, chevron_down, hairline, mix};
+use crate::controls::{Probes, chevron_down, hairline};
 use fumi_ui::fonts::family_font;
 use crate::mac;
 use crate::scroller::{ScrollTarget, Scroller};
@@ -304,7 +304,7 @@ impl Render for FontPicker {
         if self.button_hover.is_animating(now) {
             window.request_animation_frame();
         }
-        let fill = mix(c.inline_bg, c.inline_bg.blend(c.text.opacity(0.05)), hover);
+        let fill = fumi_ui::button::control_fill(hover);
         let popover = if self.is_open { self.render_popover(window, cx) } else { None };
         div()
             .id("typeface-button")

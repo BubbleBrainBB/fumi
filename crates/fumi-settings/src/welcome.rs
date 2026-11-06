@@ -269,8 +269,7 @@ impl WelcomePage {
         cx: &mut Context<Self>,
         action: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> Stateful<Div> {
-        let c = t();
-        let amount = if self.pressed.as_ref() == Some(&id) { 0.09 } else { 0.05 * self.hover.value(&id, moment) };
+        let fill = fumi_ui::button::quiet_fill(self.hover.value(&id, moment), self.pressed.as_ref() == Some(&id));
         let (hover_id, press_id) = (id.clone(), id.clone());
         div()
             .id(id)
@@ -278,7 +277,7 @@ impl WelcomePage {
             .flex_none()
             .items_center()
             .rounded(px(7.))
-            .bg(c.text.opacity(amount))
+            .bg(fill)
             .cursor_pointer()
             .on_hover(cx.listener(move |this, hovering: &bool, _, cx| {
                 this.hover.set(hover_id.clone(), *hovering, Instant::now());

@@ -404,8 +404,8 @@ impl Toolbar {
         help: String,
     ) -> Stateful<Div> {
         let c = t();
-        let hover = if c.glass { c.page.opacity(0.75) } else { c.text.opacity(0.05) };
-        let press = c.text.opacity(0.09);
+        let hover = if c.glass { c.page.opacity(0.75) } else { fumi_ui::button::quiet_fill(1., false) };
+        let press = fumi_ui::button::quiet_fill(0., true);
         let mut button = div()
             .id(id)
             .w(px(36.))

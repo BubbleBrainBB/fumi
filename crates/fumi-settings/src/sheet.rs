@@ -504,9 +504,8 @@ impl SettingsSheet {
     // Controls ----------------------------------------------------------------
 
     fn control_fill(&self, key: &'static str, now: Instant) -> Hsla {
-        let c = t();
         let v = if self.menu_open == Some(key) { 1. } else { self.hover.value(&key, now) };
-        mix(c.inline_bg, c.inline_bg.blend(c.text.opacity(0.05)), v)
+        fumi_ui::button::control_fill(v)
     }
 
     fn pop_up(
@@ -707,7 +706,7 @@ impl SettingsSheet {
             .w(px(26.))
             .h(px(24.))
             .rounded(px(6.))
-            .bg(c.text.opacity(0.06 * hover))
+            .bg(fumi_ui::button::quiet_fill(hover, false))
             .opacity(if enabled { 1. } else { 0.35 })
             .when(enabled, |d| {
                 d.cursor_pointer().on_click(cx.listener(move |this, _, window, cx| {

@@ -1226,33 +1226,12 @@ impl PublishPane {
     /// The side's one button, Copy or Export: a plain bordered button, so the color
     /// on the sheet is the article's own.
     fn pane_button(name: &'static str, help: &'static str, enabled: bool, content: Vec<AnyElement>) -> Stateful<Div> {
-        let c = t();
-        div()
-            .id(name)
+        fumi_ui::button::bordered(name)
             .relative()
-            .h(px(24.))
-            .px(px(11.))
-            .flex()
-            .items_center()
             .gap(px(5.))
-            .rounded(px(6.))
-            .bg(if c.dark { hsla(0., 0., 1., 0.1) } else { gpui::white() })
-            .border_1()
-            .border_color(c.control_border)
-            .when(!c.dark, |el| {
-                el.shadow(vec![BoxShadow {
-                    color: hsla(0., 0., 0., 0.05),
-                    offset: point(px(0.), px(0.5)),
-                    blur_radius: px(0.5),
-                    spread_radius: px(0.),
-                    inset: false,
-                }])
-            })
             .text_size(px(text_size::CAPTION))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(c.text)
             .tooltip(tip(help))
-            .when(enabled, |el| el.active(|s| s.bg(c.inline_bg)))
             .when(!enabled, |el| el.opacity(0.45))
             .children(content)
     }
