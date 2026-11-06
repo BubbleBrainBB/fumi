@@ -761,31 +761,29 @@ impl MemosView {
         )
     }
 
-    /// The page's top edge, the two-part gradient of `PageEdgeBlur`, without the
-    /// blur GPUI can't do. Nothing in Glass, where the page itself is clear.
+    /// The page's top edge, `PageEdgeBlur`'s wash without the blur GPUI can't do:
+    /// one straight wash from 80% to clear, within 7% of its two-part gradient,
+    /// since GPUI caps a corner at half the element's height and the page's
+    /// rounded corners need a band taller than twice their radius. Nothing in
+    /// Glass, where the page itself is clear.
     fn render_top_fade(&self) -> Option<Div> {
         let c = t();
         if c.glass {
             return None;
         }
-        let band = |height: f32, from: f32, to: f32| {
-            div().h(px(height)).w_full().bg(linear_gradient(
-                180.,
-                linear_color_stop(c.page_content.opacity(from), 0.),
-                linear_color_stop(c.page_content.opacity(to), 1.),
-            ))
-        };
         Some(
             div()
                 .absolute()
                 .top_0()
                 .left_0()
                 .right_0()
-                .flex()
-                .flex_col()
-                // The page's corners, as the page's own fill rounds them.
-                .child(band(12., 0.8, 0.3).rounded_t(px(fumi_ui::theme::PAGE_INNER_RADIUS)))
-                .child(band(10.5, 0.3, 0.)),
+                .h(px(12. + 10.5))
+                .rounded_t(px(fumi_ui::theme::PAGE_INNER_RADIUS))
+                .bg(linear_gradient(
+                    180.,
+                    linear_color_stop(c.page_content.opacity(0.8), 0.),
+                    linear_color_stop(c.page_content.opacity(0.), 1.),
+                )),
         )
     }
 }

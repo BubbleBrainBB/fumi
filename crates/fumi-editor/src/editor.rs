@@ -2559,18 +2559,17 @@ impl Editor {
 
 impl Editor {
     /// The soft edge text scrolls under at the page's top: the Swift band's wash,
-    /// 80% of the page at the top, 30% at 40% down, clear from 75%. GPUI's
-    /// gradients take two stops, so it's two bands. Blur isn't available here,
-    /// and on Glass, which has no page color to wash with, there's no band.
+    /// 80% of the page at the top, 30% at 40% down, clear from 75%. Here it's one
+    /// straight wash from 80% to clear over that 75%, within 7% of the Swift
+    /// curve: GPUI caps a corner at half the element's height, and the page's
+    /// rounded corners need a band taller than twice their radius. Blur isn't
+    /// available here, and on Glass, which has no page color to wash with, there's
+    /// no band.
     fn fade_band(&self) -> Option<Div> {
         let c = t();
         if c.glass {
             return None;
         }
-        let wash = |from: f32, to: f32| {
-            linear_gradient(180., linear_color_stop(c.page_content.opacity(from), 0.), linear_color_stop(c.page_content.opacity(to), 1.))
-        };
-        let (first, second) = fade_band_stops(FADE_BAND);
         Some(
             div()
                 .absolute()
@@ -2578,10 +2577,12 @@ impl Editor {
                 .left_0()
                 .right_0()
                 .h(px(FADE_BAND))
-                .flex()
-                .flex_col()
-                .child(div().w_full().h(px(first)).flex_none().rounded_t(px(fumi_ui::theme::PAGE_INNER_RADIUS)).bg(wash(0.8, 0.3)))
-                .child(div().w_full().h(px(second)).flex_none().bg(wash(0.3, 0.))),
+                .rounded_t(px(fumi_ui::theme::PAGE_INNER_RADIUS))
+                .bg(linear_gradient(
+                    180.,
+                    linear_color_stop(c.page_content.opacity(0.8), 0.),
+                    linear_color_stop(c.page_content.opacity(0.), 1.),
+                )),
         )
     }
 
@@ -2841,12 +2842,8 @@ impl EntityInputHandler for Editor {
 
 // Whole-document passes -------------------------------------------------------
 
-const FADE_BAND: f32 = 30.;
-
-/// The heights of the band's two washes: to 40% down, then on to 75%.
-fn fade_band_stops(height: f32) -> (f32, f32) {
-    (height * 0.4, height * (0.75 - 0.4))
-}
+/// The top wash's height: where the Swift band's 30 pt wash turns clear.
+const FADE_BAND: f32 = 30. * 0.75;
 
 /// A fence's info string's first word: its language.
 fn fence_language(line: &str) -> &str {
@@ -3092,8 +3089,8 @@ mod tests {
     }
 
     #[core::prelude::v1::test]
-    fn the_top_band_washes_in_two_stretches() {
-        assert_eq!(fade_band_stops(30.), (12., 10.5));
+    fn the_top_band_is_tall_enough_for_the_page_corners() {
+        assert!(FADE_BAND >= fumi_ui::theme::PAGE_INNER_RADIUS * 2.);
     }
 
     #[core::prelude::v1::test]
