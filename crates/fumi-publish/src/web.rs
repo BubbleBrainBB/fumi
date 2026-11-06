@@ -12,7 +12,7 @@ use futures::channel::{mpsc, oneshot};
 use fumi_ui::native::load_framework;
 use gpui::*;
 use objc::declare::ClassDecl;
-use objc::runtime::{BOOL, Class, Object, Sel, YES};
+use objc::runtime::{BOOL, Class, NO, Object, Sel, YES};
 use objc::{class, msg_send, sel, sel_impl};
 use std::cell::Cell;
 
@@ -333,6 +333,52 @@ fn keep_keys_out_of_gpui(container: id, gpui_view: id) {
     }
 }
 
+/// GPUI's `performKeyEquivalent:`, before Fumi wrapped it.
+static GPUI_KEY_EQUIVALENT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
+/// AppKit offers a key equivalent (⌘A, ⌘C, ⌘-arrows…) to the view hierarchy before the
+/// first responder, so GPUI's view sees it before the page inside it does, and would run
+/// whatever GPUI binding matches its own focus: ⌘A selecting the editor's text while
+/// the page has the keyboard. While a native view inside GPUI's view is first responder,
+/// GPUI's view passes on key equivalents, and AppKit takes them on through the menu bar to
+/// the page.
+extern "C" fn key_equivalent(this: &Object, sel: Sel, event: id) -> BOOL {
+    unsafe {
+        let this_id = this as *const Object as id;
+        let ns_window: id = msg_send![this_id, window];
+        let responder: id = if ns_window != nil { msg_send![ns_window, firstResponder] } else { nil };
+        if responder != nil && responder != this_id {
+            let is_view: BOOL = msg_send![responder, isKindOfClass: class!(NSView)];
+            if is_view == YES {
+                let inside: BOOL = msg_send![responder, isDescendantOf: this_id];
+                if inside == YES {
+                    return NO;
+                }
+            }
+        }
+        let original: extern "C" fn(&Object, Sel, id) -> BOOL =
+            std::mem::transmute(*GPUI_KEY_EQUIVALENT.get().expect("wrapped"));
+        original(this, sel, event)
+    }
+}
+
+/// Wraps GPUI's view's `performKeyEquivalent:` once, for every window.
+fn pass_key_equivalents_to_pages(gpui_view: id) {
+    if gpui_view == nil || GPUI_KEY_EQUIVALENT.get().is_some() {
+        return;
+    }
+    unsafe {
+        let class: *const Class = msg_send![gpui_view, class];
+        let method = objc::runtime::class_getInstanceMethod(class, sel!(performKeyEquivalent:));
+        if method.is_null() {
+            return;
+        }
+        let ours: extern "C" fn(&Object, Sel, id) -> BOOL = key_equivalent;
+        let theirs = objc::runtime::method_setImplementation(method as *mut _, std::mem::transmute(ours));
+        let _ = GPUI_KEY_EQUIVALENT.set(theirs as usize);
+    }
+}
+
 /// A native composition surface and its `NSView`; `None` if the window can't compose.
 fn native_surface(window: &Window) -> Option<(WindowCompositionSurface, id)> {
     let composition = window.enable_window_composition().map_err(|e| eprintln!("compose: {e:#}")).ok()?;
@@ -419,6 +465,7 @@ impl WebHost {
             let _: () = msg_send![container, addSubview: web];
             let _: () = msg_send![surface_view, addSubview: container];
             keep_keys_out_of_gpui(container, gpui_view);
+            pass_key_equivalents_to_pages(gpui_view);
             Some((
                 WebHost {
                     web,

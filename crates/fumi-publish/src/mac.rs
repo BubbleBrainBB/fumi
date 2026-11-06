@@ -73,8 +73,8 @@ pub fn gpui_view_of(window: &Window) -> id {
     }
 }
 
-/// AppKit leaves the keyboard with a web view when GPUI is clicked, so GPUI's view
-/// claims it back.
+/// Makes `view` the window's first responder, if it isn't already: GPUI's view when GPUI is
+/// clicked (AppKit would leave the keyboard with a web view), or a web view when it is.
 pub fn claim_first_responder(ns_window: id, view: id) {
     if ns_window == nil || view == nil {
         return;
@@ -84,6 +84,36 @@ pub fn claim_first_responder(ns_window: id, view: id) {
         if current != view {
             let _: bool = msg_send![ns_window, makeFirstResponder: view];
         }
+    }
+}
+
+/// Whether the press AppKit is handling now lands in `view` (a web view), going by what
+/// AppKit's own hit testing finds there: GPUI's overlay views only answer inside GPUI's
+/// hitboxes, so Search or the Info card over the page count as GPUI's.
+pub fn press_lands_in(ns_window: id, view: id) -> bool {
+    if ns_window == nil || view == nil {
+        return false;
+    }
+    unsafe {
+        let app: id = msg_send![class!(NSApplication), sharedApplication];
+        let event: id = msg_send![app, currentEvent];
+        if event == nil {
+            return false;
+        }
+        let event_window: id = msg_send![event, window];
+        if event_window != ns_window {
+            return false;
+        }
+        let point: cocoa::foundation::NSPoint = msg_send![event, locationInWindow];
+        let content: id = msg_send![ns_window, contentView];
+        let frame_view: id = msg_send![content, superview];
+        let root = if frame_view != nil { frame_view } else { content };
+        let hit: id = msg_send![root, hitTest: point];
+        if hit == nil {
+            return false;
+        }
+        let inside: bool = msg_send![hit, isDescendantOf: view];
+        inside
     }
 }
 

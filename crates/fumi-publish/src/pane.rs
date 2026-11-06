@@ -1350,25 +1350,35 @@ impl PublishPane {
     /// the Info card are deferred draws, so window composition puts them above it.
     fn slot(&self, cards: bool, cx: &mut Context<Self>) -> AnyElement {
         let entity = cx.entity();
-        let handles = if cards { self.cards_web.as_ref() } else { self.article_web.as_ref() }.map(|w| w.window_handles());
-        canvas(
+        let handles = if cards { self.cards_web.as_ref() } else { self.article_web.as_ref() }
+            .map(|w| (w.window_handles(), w.web as usize));
+        let slot = canvas(
             move |bounds, window, cx| {
                 let clip = window.content_mask().bounds;
                 entity.update(cx, |this, cx| this.place_web(cards, bounds, clip, cx));
             },
             move |_, _, window, _| {
-                // AppKit leaves the keyboard with the web view when GPUI is clicked.
-                if let Some((ns_window, view)) = handles {
+                // AppKit leaves the keyboard with the web view when GPUI is clicked, so GPUI
+                // claims it back. With window composition GPUI's capture also sees presses that
+                // land in the page; those hand the keyboard to the page, which AppKit doesn't
+                // always do by itself once GPUI's view (the page's ancestor) has it.
+                if let Some(((ns_window, view), web)) = handles {
                     window.on_mouse_event(move |_: &MouseDownEvent, phase, _, _| {
-                        if phase == DispatchPhase::Capture {
-                            mac::claim_first_responder(ns_window as id, view as id);
+                        if phase != DispatchPhase::Capture {
+                            return;
                         }
+                        let target = if mac::press_lands_in(ns_window as id, web as id) { web } else { view };
+                        mac::claim_first_responder(ns_window as id, target as id);
                     });
                 }
             },
         )
-        .size_full()
-        .into_any_element()
+        .size_full();
+        // With window composition GPUI dispatches a press on the page before AppKit does,
+        // and hands it on only if nothing in GPUI took it. The pane around the slot tracks
+        // focus, which takes every press it's hovered for; this hitbox, with no listeners of
+        // its own, keeps the pane from being hovered here.
+        div().size_full().occlude().child(slot).into_any_element()
     }
 
     fn place_web(&mut self, cards: bool, bounds: Bounds<Pixels>, clip: Bounds<Pixels>, cx: &mut Context<Self>) {
