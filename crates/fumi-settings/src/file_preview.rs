@@ -520,6 +520,7 @@ impl Render for FilePreview {
         div()
             .size_full()
             .p(px(padding))
+            .rounded(px(fumi_ui::theme::PAGE_INNER_RADIUS))
             .bg(c.page_content)
             .font(family_font("System"))
             .child(content)

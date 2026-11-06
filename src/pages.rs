@@ -11,7 +11,7 @@ use fumi_core::tabs::Content;
 use fumi_core::wiki_link::WikiLink;
 use fumi_editor::display::{LinkContext, Typography};
 use fumi_editor::editor::{Editor, EditorEvent, ViewState};
-use fumi_ui::theme::t;
+use fumi_ui::theme::{PAGE_INNER_RADIUS, t};
 use fumi_editor::element::CaretSlot;
 use gpui::*;
 use std::collections::HashMap;
@@ -426,14 +426,14 @@ impl Render for PageHost {
                 (w.store.has_loaded_notes(), w.store.notes().len())
             };
             match empty_page(loaded, count) {
-                EmptyPage::NoNotes => return div().size_full().bg(c.page_content).child(self.empty.clone()).into_any_element(),
-                EmptyPage::Blank => return div().size_full().bg(c.page_content).into_any_element(),
+                EmptyPage::NoNotes => return div().size_full().rounded(px(PAGE_INNER_RADIUS)).bg(c.page_content).child(self.empty.clone()).into_any_element(),
+                EmptyPage::Blank => return div().size_full().rounded(px(PAGE_INNER_RADIUS)).bg(c.page_content).into_any_element(),
                 EmptyPage::Draft => {}
             }
         }
         self.ensure_page(&tab, &content, window, cx);
         self.page_shown(&tab, window, cx);
-        let body = div().size_full().bg(c.page_content);
+        let body = div().size_full().rounded(px(PAGE_INNER_RADIUS)).bg(c.page_content);
         match &content {
             Content::File(id) => {
                 let current = self.file.as_ref().is_some_and(|(shown, _)| shown == id);

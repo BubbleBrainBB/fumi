@@ -45,7 +45,7 @@ impl Render for CaretLayer {
 }
 
 pub const PAGE_INSET: f32 = 8.;
-pub const PAGE_RADIUS: f32 = 12.;
+pub const PAGE_RADIUS: f32 = fumi_ui::theme::PAGE_RADIUS;
 pub const TOOLBAR_HEIGHT: f32 = 52.;
 
 /// The welcome page's plain sheet settling into the framed window.

@@ -832,6 +832,7 @@ impl Render for MemosView {
             .track_focus(&self.focus)
             .relative()
             .size_full()
+            .rounded(px(fumi_ui::theme::PAGE_INNER_RADIUS))
             .bg(c.page_content)
             .on_action(cx.listener(|this, _: &CopySelection, _, cx| {
                 if let Some(text) = this.host.selection.borrow().text() {

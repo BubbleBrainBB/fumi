@@ -2062,6 +2062,7 @@ impl Render for Editor {
             .relative()
             .flex()
             .flex_row()
+            .rounded(px(fumi_ui::theme::PAGE_INNER_RADIUS))
             .bg(t().page_content)
             .text_color(t().text)
             .font(self.typo.body())

@@ -8,6 +8,12 @@
 use gpui::*;
 use std::cell::Cell;
 
+/// The framed page's corner radius.
+pub const PAGE_RADIUS: f32 = 12.;
+/// Inside its 1 pt edge: what fills the page rounds its corners by this, since
+/// GPUI clips children to a rectangle and a square fill would show past the curve.
+pub const PAGE_INNER_RADIUS: f32 = PAGE_RADIUS - 1.;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AppTheme {
     White,
