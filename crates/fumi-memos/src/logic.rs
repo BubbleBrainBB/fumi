@@ -32,24 +32,6 @@ pub fn margin_x(page_width: f32) -> f32 {
     column_x(page_width) + COLUMN_WIDTH + MARGIN_GAP
 }
 
-/// The quiet scroller's thumb: its top and height, in a track of `view` points.
-pub fn thumb(view: f32, max_offset: f32, offset: f32) -> Option<(f32, f32)> {
-    if view <= 0. || max_offset <= 0. {
-        return None;
-    }
-    let content = view + max_offset;
-    let track = view - 4.;
-    let height = (track * view / content).max(24.);
-    let top = 2. + (track - height) * (offset / max_offset).clamp(0., 1.);
-    Some((top, height))
-}
-
-/// The scroll offset for a thumb dragged to `top`.
-pub fn offset_for_thumb(view: f32, max_offset: f32, height: f32, top: f32) -> f32 {
-    let travel = (view - 4. - height).max(1.);
-    ((top - 2.) / travel).clamp(0., 1.) * max_offset
-}
-
 // Filters and grouping.
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -495,20 +477,6 @@ mod tests {
         assert_eq!(h.card, None);
         assert!(!h.show_due("a"));
         assert_eq!(h.hide_due(), None);
-    }
-
-    #[test]
-    fn the_thumb_tracks_the_offset() {
-        assert_eq!(thumb(500., 0., 0.), None);
-        let (top, height) = thumb(500., 500., 0.).unwrap();
-        assert_eq!((top, height), (2., 248.));
-        let (top, _) = thumb(500., 500., 500.).unwrap();
-        assert_eq!(top, 2. + (496. - 248.));
-        // A very long page keeps a thumb you can grab.
-        assert_eq!(thumb(500., 1_000_000., 0.).unwrap().1, 24.);
-        // Dragging round-trips.
-        let (top, height) = thumb(500., 500., 250.).unwrap();
-        assert!((offset_for_thumb(500., 500., height, top) - 250.).abs() < 0.01);
     }
 
     #[test]

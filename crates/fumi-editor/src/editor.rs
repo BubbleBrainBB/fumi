@@ -4,6 +4,7 @@
 use crate::blocks::{self, BlockCache};
 use fumi_core::markdown::{find_title, scan_all};
 use fumi_ui::native::SymbolCache;
+use fumi_ui::scroller;
 use fumi_ui::theme::t;
 use crate::display::{self, *};
 use crate::spell;
@@ -2099,14 +2100,11 @@ impl Render for Editor {
             .h_full()
             .child(list(self.list.clone(), cx.processor(Self::render_item)).size_full())
             .children(thumb.map(|(top, height)| {
-                div()
+                scroller::thumb_bar(1.)
                     .absolute()
-                    .right(px(1.5))
+                    .right(px((scroller::SLOT_WIDTH - scroller::THUMB_WIDTH) / 2.))
                     .top(top)
-                    .w(px(4.))
                     .h(height)
-                    .rounded(px(2.))
-                    .bg(t().faint_icon.opacity(0.6))
             }))
             .children(self.hovered_web.clone().map(|address| {
                 let c = t();
@@ -2615,13 +2613,13 @@ impl Editor {
         let view = f32::from(self.list.viewport_bounds().size.height);
         let max = f32::from(self.list.max_offset_for_scrollbar().y);
         let offset = -f32::from(self.list.scroll_px_offset_for_scrollbar().y);
-        let (top, height) = thumb_rect(view, view + max, offset)?;
+        let (top, height) = scroller::thumb_geometry(view, max, offset)?;
         Some((px(top), px(height)))
     }
 
     fn over_scroller(&self, p: Point<Pixels>) -> bool {
         let view = self.list.viewport_bounds();
-        p.x >= view.right() - px(SCROLLER_SLOT) && p.x <= view.right() && p.y >= view.top() && p.y <= view.bottom()
+        p.x >= view.right() - px(scroller::SLOT_WIDTH) && p.x <= view.right() && p.y >= view.top() && p.y <= view.bottom()
     }
 
     /// A press in the scroller's slot, while the thumb can be seen: on the thumb
@@ -2645,15 +2643,10 @@ impl Editor {
     }
 
     fn drag_scroller(&mut self, p: Point<Pixels>, cx: &mut Context<Self>) {
-        let (Some(grab), Some((_, height))) = (self.thumb_drag, self.thumb_metrics()) else { return };
+        let Some(grab) = self.thumb_drag else { return };
         let view = self.list.viewport_bounds();
         let max = f32::from(self.list.max_offset_for_scrollbar().y);
-        let offset = thumb_offset(
-            f32::from(p.y - view.top() - grab),
-            f32::from(view.size.height),
-            f32::from(height),
-            max,
-        );
+        let offset = scroller::offset_for_top(f32::from(view.size.height), max, f32::from(p.y - view.top() - grab));
         self.list.set_offset_from_scrollbar(point(px(0.), px(-offset)));
         self.scrolled_at = Some(Instant::now());
         cx.notify();
@@ -2667,30 +2660,6 @@ impl Editor {
             cx.notify();
         }
     }
-}
-
-/// The scroller's slot, at the pane's right edge.
-const SCROLLER_SLOT: f32 = 7.;
-
-/// The thumb's top and height for a pane `view` tall showing `content` from
-/// `offset`: its true length, inset 2 at each end, at least 24 tall. None if it
-/// all fits.
-pub fn thumb_rect(view: f32, content: f32, offset: f32) -> Option<(f32, f32)> {
-    if view <= 0. || content <= view {
-        return None;
-    }
-    let raw_height = view * view / content;
-    let raw_top = (view - raw_height) * (offset / (content - view)).clamp(0., 1.);
-    let inset_height = raw_height - 4.;
-    let height = inset_height.max(24.);
-    let middle = raw_top + 2. + inset_height / 2.;
-    Some((middle - height / 2., height))
-}
-
-/// Where the scroll offset goes for a thumb dragged to `top`.
-pub fn thumb_offset(top: f32, view: f32, height: f32, max: f32) -> f32 {
-    let travel = (view - height).max(1.);
-    (top / travel).clamp(0., 1.) * max
 }
 
 // The input method path -------------------------------------------------------
@@ -3016,31 +2985,6 @@ mod tests {
 
     fn item_ix(items: &[Item], line: u32) -> usize {
         items.iter().position(|i| i.start == line).unwrap()
-    }
-
-    #[core::prelude::v1::test]
-    fn the_thumb_keeps_its_true_length_inside_its_inset() {
-        // A third of the note showing, at the top: a third of the pane, less 4.
-        let (top, height) = thumb_rect(600., 1800., 0.).unwrap();
-        assert_eq!((top, height), (2., 196.));
-        // At the end it stops 2 short of the bottom.
-        let (top, height) = thumb_rect(600., 1800., 1200.).unwrap();
-        assert_eq!(top + height, 598.);
-        // A long note: 24 at the least.
-        let (_, height) = thumb_rect(600., 600_000., 0.).unwrap();
-        assert_eq!(height, 24.);
-        // Everything fits: no thumb.
-        assert_eq!(thumb_rect(600., 600., 0.), None);
-        assert_eq!(thumb_rect(0., 600., 0.), None);
-    }
-
-    #[core::prelude::v1::test]
-    fn dragging_the_thumb_reaches_both_ends() {
-        assert_eq!(thumb_offset(0., 600., 200., 1200.), 0.);
-        assert_eq!(thumb_offset(400., 600., 200., 1200.), 1200.);
-        assert_eq!(thumb_offset(200., 600., 200., 1200.), 600.);
-        assert_eq!(thumb_offset(-50., 600., 200., 1200.), 0.);
-        assert_eq!(thumb_offset(900., 600., 200., 1200.), 1200.);
     }
 
     #[core::prelude::v1::test]

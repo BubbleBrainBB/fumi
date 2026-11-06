@@ -9,6 +9,7 @@ use crate::{field, inline::BlockDoc};
 use fumi_core::memo_format::Memo;
 use fumi_ui::icons;
 use fumi_ui::native::weight;
+use fumi_ui::scroller::{ScrollTarget, Scroller};
 use fumi_ui::settings;
 use fumi_ui::text_field::{FieldEvent, TextField};
 use fumi_ui::theme::{AppTheme, t};
@@ -149,10 +150,7 @@ pub struct MemosView {
     pub(crate) arrow_hover: [bool; 2],
     pub(crate) hovered_tag: Option<String>,
     pub(crate) menu_anchor: Rc<Cell<Bounds<Pixels>>>,
-    scrolled_at: Option<Instant>,
-    thumb_hover: bool,
-    /// While dragging the thumb: the grab point below its top.
-    thumb_drag: Option<f32>,
+    scroller: Scroller,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -207,7 +205,7 @@ impl MemosView {
             workspace,
             focus,
             composer,
-            list,
+            list: list.clone(),
             seen_revision: None,
             memos: Rc::new(Vec::new()),
             counts: Rc::new(HashMap::new()),
@@ -232,9 +230,7 @@ impl MemosView {
             arrow_hover: [false; 2],
             hovered_tag: None,
             menu_anchor: Rc::new(Cell::new(Bounds::default())),
-            scrolled_at: None,
-            thumb_hover: false,
-            thumb_drag: None,
+            scroller: Scroller::new(ScrollTarget::List(list.clone())),
             _subscriptions: subscriptions,
         };
         this.sync(cx);
@@ -302,13 +298,8 @@ impl MemosView {
         cx.notify();
     }
 
+    /// The scroller notices the move when it next draws.
     fn note_scroll(&mut self, cx: &mut Context<Self>) {
-        self.scrolled_at = Some(Instant::now());
-        cx.spawn(async move |this: WeakEntity<MemosView>, cx| {
-            cx.background_executor().timer(Duration::from_millis(1100)).await;
-            let _ = this.update(cx, |_, cx| cx.notify());
-        })
-        .detach();
         cx.notify();
     }
 
@@ -686,48 +677,6 @@ impl MemosView {
             )
     }
 
-    fn thumb_geometry(&self) -> Option<(f32, f32, f32, f32)> {
-        let view = f32::from(self.list.viewport_bounds().size.height);
-        let max = f32::from(self.list.max_offset_for_scrollbar().y);
-        let offset = -f32::from(self.list.scroll_px_offset_for_scrollbar().y);
-        let (top, height) = logic::thumb(view, max, offset)?;
-        Some((view, max, top, height))
-    }
-
-    /// The slim quiet scroller: shows while moving, then hides; can be dragged.
-    fn render_thumb(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let recently = self.scrolled_at.is_some_and(|at| at.elapsed() < Duration::from_millis(1000));
-        if !recently && !self.thumb_hover && self.thumb_drag.is_none() {
-            return None;
-        }
-        let (_, _, top, height) = self.thumb_geometry()?;
-        let color = t().faint_icon.opacity(0.6);
-        Some(
-            div()
-                .id("memo-thumb")
-                .absolute()
-                .top(px(top))
-                .right_0()
-                .w(px(7.))
-                .h(px(height))
-                .flex()
-                .justify_center()
-                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                    this.thumb_hover = *hovered;
-                    cx.notify();
-                }))
-                .on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
-                    let origin = this.list.viewport_bounds().origin.y;
-                    this.thumb_drag = Some(f32::from(e.position.y - origin) - top);
-                    this.list.scrollbar_drag_started();
-                    cx.stop_propagation();
-                    cx.notify();
-                }))
-                .child(div().w(px(4.)).h_full().rounded(px(2.)).bg(color))
-                .into_any_element(),
-        )
-    }
-
     /// The page's top edge, `PageEdgeBlur`'s wash without the blur GPUI can't do:
     /// one straight wash from 80% to clear, within 7% of its two-part gradient,
     /// since GPUI caps a corner at half the element's height and the page's
@@ -790,8 +739,7 @@ impl Render for MemosView {
         .absolute()
         .size_full();
         let margin = logic::shows_margin(self.page_width).then(|| self.render_margin(cx));
-        let thumb = self.render_thumb(cx);
-        let _ = window;
+        let thumb = self.scroller.thumb(|this: &mut Self| &mut this.scroller, Instant::now(), window, cx);
         div()
             .id("memos-page")
             .key_context("MemosPage")
@@ -819,19 +767,6 @@ impl Render for MemosView {
                     cx.notify();
                 }
             }))
-            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| {
-                if let Some(grab) = this.thumb_drag
-                    && let Some((view, max, _, height)) = this.thumb_geometry()
-                {
-                    let origin = this.list.viewport_bounds().origin.y;
-                    let top = f32::from(e.position.y - origin) - grab;
-                    let offset = logic::offset_for_thumb(view, max, height, top);
-                    this.list.set_offset_from_scrollbar(point(px(0.), px(-offset)));
-                    cx.notify();
-                }
-            }))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_thumb_drag(cx)))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_thumb_drag(cx)))
             .child(measure)
             .child(
                 list(self.list.clone(), cx.processor(|this, ix: usize, window, cx| this.render_item(ix, window, cx)))
@@ -840,15 +775,5 @@ impl Render for MemosView {
             .children(self.render_top_fade())
             .children(margin)
             .children(thumb)
-    }
-}
-
-impl MemosView {
-    fn end_thumb_drag(&mut self, cx: &mut Context<Self>) {
-        if self.thumb_drag.take().is_some() {
-            self.list.scrollbar_drag_ended();
-            self.scrolled_at = Some(Instant::now());
-            cx.notify();
-        }
     }
 }

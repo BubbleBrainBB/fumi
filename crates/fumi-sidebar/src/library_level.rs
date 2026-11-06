@@ -12,6 +12,7 @@ use fumi_core::{app_model::SortMode, attachment_import};
 use fumi_ui::icons::{self, Glyph};
 use fumi_ui::native::{self, weight};
 use fumi_ui::settings;
+use fumi_ui::scroller;
 use fumi_ui::theme::{Tokens, t};
 use fumi_workspace::{libraries, now};
 use gpui::prelude::*;
@@ -639,9 +640,9 @@ impl SidebarView {
 
     // MARK: Scroller
 
-    /// A list's short overlay thumb, while it's moving.
+    /// A list's short overlay thumb, while it's moving: the shared thumb, kept
+    /// short (`logic::scroller_knob`) as the sidebar's lists always drew it.
     pub(crate) fn scroller(&mut self, list: ListKind, content: f32, window: &mut Window, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let c = t();
         let handle = match list {
             ListKind::Tree => self.tree_scroll.clone(),
             ListKind::Libraries => self.libraries_scroll.clone(),
@@ -694,12 +695,12 @@ impl SidebarView {
                 .absolute()
                 .right_0()
                 .top(px(y))
-                .w(px(7.))
+                .w(px(scroller::SLOT_WIDTH))
                 .h(px(height))
                 .flex()
                 .justify_center()
                 .occlude()
-                .child(div().w(px(4.)).h_full().rounded(px(2.)).bg(c.faint_icon.opacity(0.6 * alpha)))
+                .child(scroller::thumb_bar(alpha).h_full())
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, event: &MouseDownEvent, _, cx| {

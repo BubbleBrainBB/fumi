@@ -2,13 +2,13 @@
 //! previews. Everything here reads and changes a window's `Workspace`.
 #![allow(unexpected_cfgs, deprecated)]
 
-pub mod anim;
+pub use fumi_ui::anim;
 pub mod controls;
 pub mod file_preview;
 pub mod font_picker;
 #[allow(deprecated)]
 pub mod mac;
-pub mod scroller;
+pub use fumi_ui::scroller;
 pub mod search;
 pub mod sheet;
 pub mod welcome;

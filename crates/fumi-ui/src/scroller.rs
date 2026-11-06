@@ -1,8 +1,10 @@
-//! The slim overlay scroller: no track, a 4 pt rounded thumb in a 7 pt slot that
-//! shows while moving, then hides. `QuietScroller.swift` over a GPUI scroll area.
+//! The slim overlay scroller every scrolling area uses: no track, a 4 pt rounded
+//! thumb in a 7 pt slot that shows while moving, then hides. `QuietScroller.swift`
+//! over a GPUI scroll area. Views that route their own mouse events (the editor)
+//! use the geometry and `thumb_bar` directly.
 
 use crate::anim::Transition;
-use fumi_ui::theme::t;
+use crate::theme::t;
 use gpui::prelude::*;
 use gpui::*;
 use std::time::{Duration, Instant};
@@ -38,6 +40,23 @@ pub fn drag_offset(viewport: f32, max_offset: f32, start_offset: f32, dy: f32) -
     (start_offset + dy / travel * max_offset).clamp(0., max_offset)
 }
 
+/// The scroll offset that puts the thumb's top at `top`, for a view that tracks
+/// where in the thumb the pointer took hold.
+pub fn offset_for_top(viewport: f32, max_offset: f32, top: f32) -> f32 {
+    let Some((start, _)) = thumb_geometry(viewport, max_offset, 0.) else { return 0. };
+    drag_offset(viewport, max_offset, 0., top - start)
+}
+
+/// The thumb's colour at `alpha` of fully shown.
+pub fn thumb_color(alpha: f32) -> Hsla {
+    t().faint_icon.opacity(0.6 * alpha)
+}
+
+/// The thumb itself, for a view that places it: 4 pt wide, rounded, `alpha` shown.
+pub fn thumb_bar(alpha: f32) -> Div {
+    div().w(px(THUMB_WIDTH)).rounded(px(THUMB_WIDTH / 2.)).bg(thumb_color(alpha))
+}
+
 /// What the thumb scrolls.
 #[derive(Clone)]
 pub enum ScrollTarget {
@@ -71,6 +90,19 @@ impl ScrollTarget {
         match self {
             Self::Handle(h) => h.set_offset(point(px(0.), px(-offset))),
             Self::List(l) => l.set_offset_from_scrollbar(point(px(0.), px(-offset))),
+        }
+    }
+
+    /// A list keeps its items measured as they are while the thumb is held.
+    fn drag_started(&self) {
+        if let Self::List(l) = self {
+            l.scrollbar_drag_started();
+        }
+    }
+
+    fn drag_ended(&self) {
+        if let Self::List(l) = self {
+            l.scrollbar_drag_ended();
         }
     }
 }
@@ -121,7 +153,6 @@ impl Scroller {
         if alpha <= 0. {
             return None;
         }
-        let c = t();
         let entity = cx.entity();
         let entity2 = entity.clone();
         Some(
@@ -139,8 +170,8 @@ impl Scroller {
                         .right(px((SLOT_WIDTH - THUMB_WIDTH) / 2.))
                         .w(px(THUMB_WIDTH))
                         .h(px(height))
-                        .rounded(px(2.))
-                        .bg(c.faint_icon.opacity(0.6 * alpha))
+                        .rounded(px(THUMB_WIDTH / 2.))
+                        .bg(thumb_color(alpha))
                         .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                             get(this).hovered = *hovered;
                             cx.notify();
@@ -150,6 +181,7 @@ impl Scroller {
                             cx.listener(move |this, e: &MouseDownEvent, _, cx| {
                                 let s = get(this);
                                 s.drag = Some((f32::from(e.position.y), s.target.offset()));
+                                s.target.drag_started();
                                 cx.stop_propagation();
                                 cx.notify();
                             }),
@@ -173,7 +205,9 @@ impl Scroller {
                             let entity = entity2.clone();
                             window.on_mouse_event(move |_: &MouseUpEvent, _, _, cx| {
                                 entity.update(cx, |this, cx| {
-                                    if get(this).drag.take().is_some() {
+                                    let s = get(this);
+                                    if s.drag.take().is_some() {
+                                        s.target.drag_ended();
                                         cx.notify();
                                     }
                                 });
@@ -218,5 +252,15 @@ mod tests {
         let travel = 396. - h;
         assert!((drag_offset(400., 400., 0., travel) - 400.).abs() < 0.01);
         assert_eq!(drag_offset(400., 400., 0., -50.), 0.);
+    }
+
+    #[core::prelude::v1::test]
+    fn a_thumb_top_maps_back_to_its_offset() {
+        for offset in [0., 100., 250., 400.] {
+            let (top, _) = thumb_geometry(400., 400., offset).unwrap();
+            assert!((offset_for_top(400., 400., top) - offset).abs() < 0.01, "{offset}");
+        }
+        assert_eq!(offset_for_top(400., 400., -30.), 0.);
+        assert_eq!(offset_for_top(400., 400., 900.), 400.);
     }
 }
