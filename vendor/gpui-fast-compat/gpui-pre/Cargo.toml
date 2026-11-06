@@ -1,4 +1,4 @@
-# Spike only: ratex-gpui depends on `gpui-pre` ^0.3, so it would pull a second
+# ratex-gpui depends on `gpui-pre` ^0.3, so it would pull a second
 # GPUI. This stands in for gpui-pre and re-exports gpui-fast, the way
 # gpui-fast's own compat/gpui-pre does (that one is pinned at 0.3.9 and
 # depends on gpui-fast by path).

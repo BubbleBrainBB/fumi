@@ -223,9 +223,6 @@ pub struct PublishPane {
     appear: f32,
     animation: u64,
     detail_width: Rc<Cell<f32>>,
-    covered: bool,
-    hide_native: bool,
-    still: Option<Arc<RenderImage>>,
     menu_open: Option<Menu>,
     theme_anchor: Anchor,
     template_anchor: Anchor,
@@ -291,7 +288,7 @@ impl PublishPane {
             field
         });
         let subs = vec![
-            cx.observe_in(&workspace, window, |this, _, window, cx| this.sync(window, cx)),
+            cx.observe(&workspace, |this, _, cx| this.sync(cx)),
             cx.subscribe(&title_field, |this, field, e: &FieldEvent, cx| {
                 if *e == FieldEvent::Changed {
                     let typed = field.read(cx).text().to_string();
@@ -322,9 +319,6 @@ impl PublishPane {
             appear: 0.,
             animation: 0,
             detail_width: Rc::new(Cell::new(f32::MAX)),
-            covered: false,
-            hide_native: false,
-            still: None,
             menu_open: None,
             theme_anchor: anchor(),
             template_anchor: anchor(),
@@ -363,20 +357,20 @@ impl PublishPane {
             scroll: ScrollHandle::new(),
             _subs: subs,
         };
-        this.sync(window, cx);
+        this.sync(cx);
         this
     }
 
     /// Root passes the entity whose changes mean the text settled: the page host,
     /// which notifies 300 ms after typing pauses.
-    pub fn watch<T: 'static>(&mut self, entity: &Entity<T>, window: &mut Window, cx: &mut Context<Self>) {
-        let sub = cx.observe_in(entity, window, |this, _, window, cx| this.sync(window, cx));
+    pub fn watch<T: 'static>(&mut self, entity: &Entity<T>, cx: &mut Context<Self>) {
+        let sub = cx.observe(entity, |this, _, cx| this.sync(cx));
         self._subs.push(sub);
     }
 
     /// Settings › Extensions changed something the cards or the bar show.
-    pub fn settings_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.sync(window, cx);
+    pub fn settings_changed(&mut self, cx: &mut Context<Self>) {
+        self.sync(cx);
         cx.notify();
     }
 
@@ -390,7 +384,7 @@ impl PublishPane {
         self.shown
     }
 
-    fn should_show(&self, cx: &App) -> (bool, String, bool) {
+    fn should_show(&self, cx: &App) -> (bool, String) {
         let w = self.workspace.read(cx);
         let model = &w.model;
         let shown = (extension_wechat() || extension_xhs())
@@ -398,7 +392,7 @@ impl PublishPane {
             && model.is_preview_open()
             && model.selected_note().is_some()
             && !model.shows_memos();
-        (shown, model.active_id().to_string(), model.search_presented || model.show_settings || model.info_presented)
+        (shown, model.active_id().to_string())
     }
 
     fn target(&self, cx: &App) -> PublishTarget {
@@ -406,8 +400,8 @@ impl PublishPane {
     }
 
     /// The workspace, the page or Settings changed: follow them.
-    fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (shown, tab, covered) = self.should_show(cx);
+    fn sync(&mut self, cx: &mut Context<Self>) {
+        let (shown, tab) = self.should_show(cx);
         let same_tab = tab == self.tab;
         self.tab = tab;
         if shown != self.shown {
@@ -423,7 +417,6 @@ impl PublishPane {
             self.appear = if shown { 1. } else { 0. };
             self.animation += 1;
         }
-        self.set_covered(covered, window, cx);
         if self.appear <= 0. && !self.shown {
             self.hide_web_views();
         }
@@ -467,58 +460,6 @@ impl PublishPane {
                     break;
                 }
             }
-        })
-        .detach();
-    }
-
-    /// Search, Settings and the Info card float above; GPUI can't draw over a web view, so it goes
-    /// away while they're up and a still takes its place.
-    fn set_covered(&mut self, covered: bool, window: &mut Window, cx: &mut Context<Self>) {
-        // gpui-fast spike: with composition the overlays draw above the live page.
-        let covered = covered && !web::composing();
-        if covered == self.covered {
-            return;
-        }
-        self.covered = covered;
-        if !covered {
-            self.hide_native = false;
-            self.still = None;
-            cx.notify();
-            return;
-        }
-        let target = self.target(cx);
-        let web = match target {
-            PublishTarget::Wechat => self.article_web.as_ref(),
-            PublishTarget::Xiaohongshu => self.cards_web.as_ref(),
-        };
-        let visible = web.filter(|w| !w.is_hidden()).map(|w| w.web as usize);
-        let Some(web_view) = visible else {
-            self.hide_native = true;
-            self.hide_web_views();
-            return;
-        };
-        let scale = window.scale_factor() as f64;
-        let shot = web::snapshot(web_view as id, nil);
-        let timer = cx.background_executor().timer(Duration::from_millis(150));
-        cx.spawn(async move |this: WeakEntity<Self>, cx| {
-            let image = match futures::future::select(shot, Box::pin(timer)).await {
-                futures::future::Either::Left((Ok(Ok(image)), _)) => Some(image as id),
-                _ => None,
-            };
-            let still = image.and_then(|image| unsafe {
-                let size: cocoa::foundation::NSSize = msg_send![image, size];
-                let out = native::draw_to_render_image(image, size, scale);
-                let _: () = msg_send![image, release];
-                out
-            });
-            let _ = this.update(cx, |this, cx| {
-                if this.covered {
-                    this.still = still;
-                    this.hide_native = true;
-                    this.hide_web_views();
-                    cx.notify();
-                }
-            });
         })
         .detach();
     }
@@ -1405,21 +1346,17 @@ impl PublishPane {
             .children(extra)
     }
 
-    /// The web view's place in the layout. It follows on every frame; its still, while
-    /// something floats above it, is drawn here.
+    /// The web view's place in the layout. It follows on every frame. Search, Settings and
+    /// the Info card are deferred draws, so window composition puts them above it.
     fn slot(&self, cards: bool, cx: &mut Context<Self>) -> AnyElement {
         let entity = cx.entity();
-        let still = self.still.clone();
         let handles = if cards { self.cards_web.as_ref() } else { self.article_web.as_ref() }.map(|w| w.window_handles());
         canvas(
             move |bounds, window, cx| {
                 let clip = window.content_mask().bounds;
                 entity.update(cx, |this, cx| this.place_web(cards, bounds, clip, cx));
             },
-            move |bounds, _, window, _| {
-                if let Some(image) = still {
-                    let _ = window.paint_image(bounds, bounds, Corners::default(), image, 0, false);
-                }
+            move |_, _, window, _| {
                 // AppKit leaves the keyboard with the web view when GPUI is clicked.
                 if let Some((ns_window, view)) = handles {
                     window.on_mouse_event(move |_: &MouseDownEvent, phase, _, _| {
@@ -1437,7 +1374,7 @@ impl PublishPane {
     fn place_web(&mut self, cards: bool, bounds: Bounds<Pixels>, clip: Bounds<Pixels>, cx: &mut Context<Self>) {
         let alpha = (self.appear as f64) * if !cards && self.failure.is_some() { 0.35 } else { 1. };
         let radius = (self.radius as f64 - 1.).max(0.);
-        let hidden = self.hide_native || self.appear <= 0.;
+        let hidden = self.appear <= 0.;
         if cards {
             self.cards_slot.set(bounds);
             let Some(web) = &mut self.cards_web else { return };

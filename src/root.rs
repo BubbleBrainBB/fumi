@@ -120,7 +120,7 @@ impl RootView {
         let publish = cx.new(|cx| {
             PublishPane::new(workspace.clone(), Rc::new(move |cx: &App| text_pages.read(cx).active_text(cx)), window, cx)
         });
-        publish.update(cx, |p, cx| p.watch(&pages, window, cx));
+        publish.update(cx, |p, cx| p.watch(&pages, cx));
 
         let subs = vec![
             cx.observe(&publish, |_, _, cx| cx.notify()),
@@ -176,7 +176,7 @@ impl RootView {
         this
     }
 
-    fn settings_changed(&mut self, change: SettingsChange, window: &mut Window, cx: &mut Context<Self>) {
+    fn settings_changed(&mut self, change: SettingsChange, _window: &mut Window, cx: &mut Context<Self>) {
         match change {
             // Settings are the app's, not this window's: every window follows.
             // Deferred, as this window is being updated right now.
@@ -188,7 +188,7 @@ impl RootView {
                 }
             }),
             SettingsChange::Publish => {
-                self.publish.update(cx, |p, cx| p.settings_changed(window, cx));
+                self.publish.update(cx, |p, cx| p.settings_changed(cx));
                 cx.notify();
             }
         }
@@ -386,17 +386,14 @@ impl Render for RootView {
             layer(shell)
                 .child(div().size_full().flex().child(sidebar).child(detail))
             .child(self.caret.clone())
-                .children(overlays(self.search.clone().into_any_element(), self.sheet.clone().into_any_element())),
+                .child(overlay(self.search.clone()))
+                .child(overlay(self.sheet.clone())),
         )
     }
 }
 
-/// gpui-fast spike: with composition, Search and Settings must be deferred draws to land on
-/// the overlay surface above a web view; otherwise they stay plain children, as before.
-fn overlays(search: AnyElement, sheet: AnyElement) -> Vec<AnyElement> {
-    if fumi_publish::web::composing() {
-        vec![deferred(search).into_any_element(), deferred(sheet).into_any_element()]
-    } else {
-        vec![search, sheet]
-    }
+/// Search and Settings float above everything, the publish pane's web view included: a
+/// deferred draw lands on the window composition's overlay surface, above native views.
+fn overlay(view: impl IntoElement) -> Deferred {
+    deferred(view)
 }

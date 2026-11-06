@@ -295,21 +295,13 @@ pub struct WebHost {
     hidden: bool,
     last_width: f64,
     radius: f64,
-    /// gpui-fast spike: the native composition surface the container lives in, so
-    /// GPUI's overlays (deferred draws) paint above the page.
-    surface: Option<WindowCompositionSurface>,
+    /// The window composition surface the container lives in: GPUI's root view draws
+    /// below it and its deferred draws (Search, Settings, menus, the Info card) above.
+    surface: WindowCompositionSurface,
 }
 
-/// gpui-fast spike: `FUMI_COMPOSE=1` hosts web views in a composition surface.
-pub fn composing() -> bool {
-    std::env::var("FUMI_COMPOSE").is_ok_and(|v| v == "1")
-}
-
-/// A native composition surface and its `NSView`, or `None` when composition is off or fails.
+/// A native composition surface and its `NSView`; `None` if the window can't compose.
 fn native_surface(window: &Window) -> Option<(WindowCompositionSurface, id)> {
-    if !composing() {
-        return None;
-    }
     let composition = window.enable_window_composition().map_err(|e| eprintln!("compose: {e:#}")).ok()?;
     let surface = composition.create_native_surface().map_err(|e| eprintln!("compose: {e:#}")).ok()?;
     let handle = surface.platform_surface().ok()?.platform_handle().ok()?;
@@ -380,9 +372,11 @@ impl WebHost {
         let (web, delegate, sink, receive) = make_web_view(&config)?;
         let gpui_view = mac::gpui_view_of(window);
         let ns_window = fumi_ui::native::ns_window_of(window);
-        let surface = native_surface(window);
+        let Some((surface, surface_view)) = native_surface(window) else {
+            release_web_view(web, delegate, sink, config.handler);
+            return None;
+        };
         unsafe {
-            let parent: id = msg_send![gpui_view, superview];
             let container: id = msg_send![class!(NSView), alloc];
             let container: id = msg_send![container, initWithFrame: ns_rect((0., 0., 10., 10.))];
             let _: () = msg_send![container, setWantsLayer: true];
@@ -390,12 +384,7 @@ impl WebHost {
             let _: () = msg_send![layer, setMasksToBounds: true];
             let _: () = msg_send![container, setHidden: true];
             let _: () = msg_send![container, addSubview: web];
-            if let Some((_, view)) = &surface {
-                let _: () = msg_send![*view, addSubview: container];
-            } else {
-                // NSWindowAbove.
-                let _: () = msg_send![parent, addSubview: container positioned: 1i64 relativeTo: gpui_view];
-            }
+            let _: () = msg_send![surface_view, addSubview: container];
             Some((
                 WebHost {
                     web,
@@ -411,7 +400,7 @@ impl WebHost {
                     hidden: true,
                     last_width: 0.,
                     radius: 0.,
-                    surface: surface.map(|(s, _)| s),
+                    surface,
                 },
                 receive,
             ))
@@ -444,21 +433,16 @@ impl WebHost {
         unsafe {
             if self.last != Some(frames) {
                 self.last = Some(frames);
-                if let Some(surface) = &self.surface
-                    && let Ok(platform) = surface.platform_surface()
-                {
-                    // The surface takes the container's place, in top-left device pixels;
-                    // the container fills it.
+                // The surface goes where the container would, in top-left device pixels,
+                // and the container fills it.
+                let (x, y, w, h) = frames.container;
+                if let Ok(platform) = self.surface.platform_surface() {
                     let scale: f64 = msg_send![self.ns_window, backingScaleFactor];
-                    let (x, y, w, h) = frames.container;
                     let top = parent_height - y - h;
                     let d = |v: f64| DevicePixels((v * scale).round() as i32);
                     let _ = platform.set_bounds(Bounds { origin: point(d(x), d(top)), size: size(d(w), d(h)) });
-                    let _ = platform.set_visible(true);
-                    let _: () = msg_send![self.container, setFrame: ns_rect((0., 0., w, h))];
-                } else {
-                    let _: () = msg_send![self.container, setFrame: ns_rect(frames.container)];
                 }
+                let _: () = msg_send![self.container, setFrame: ns_rect((0., 0., w, h))];
                 let _: () = msg_send![self.web, setFrame: ns_rect(frames.web)];
             }
             if self.last_corner != Some(frames.at_bottom) {
@@ -474,6 +458,9 @@ impl WebHost {
             }
             if self.hidden {
                 self.hidden = false;
+                if let Ok(platform) = self.surface.platform_surface() {
+                    let _ = platform.set_visible(true);
+                }
                 let _: () = msg_send![self.container, setHidden: false];
             }
         }
@@ -488,9 +475,8 @@ impl WebHost {
             unsafe {
                 let _: () = msg_send![self.container, setHidden: true];
             }
-            if let Some(platform) = self.surface.as_ref().and_then(|s| s.platform_surface().ok()) {
+            if let Ok(platform) = self.surface.platform_surface() {
                 let _ = platform.set_visible(false);
-                self.last = None;
             }
             mac::claim_first_responder(self.ns_window, self.gpui_view);
         }
