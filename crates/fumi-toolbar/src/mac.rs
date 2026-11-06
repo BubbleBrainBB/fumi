@@ -2,14 +2,11 @@
 #![allow(deprecated, unexpected_cfgs)]
 
 use cocoa::base::{id, nil};
-use cocoa::foundation::NSSize;
 use fumi_ui::native::ns;
-use gpui::RenderImage;
 use objc::runtime::Sel;
 use objc::{class, msg_send, sel, sel_impl};
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::ffi::CStr;
-use std::sync::Arc;
 
 fn app() -> id {
     unsafe { msg_send![class!(NSApplication), sharedApplication] }
@@ -216,14 +213,6 @@ unsafe fn add_standard_edit_rows(menu: id) {
     }
 }
 
-/// A folder's name as Finder shows it: "Documents", "iCloud Drive"…
-pub fn display_name(path: &str) -> String {
-    unsafe {
-        let manager: id = msg_send![class!(NSFileManager), defaultManager];
-        string_of(msg_send![manager, displayNameAtPath: ns(path)])
-    }
-}
-
 /// "1.2 MB", as `ByteCountFormatter` writes a file's size.
 pub fn file_size_label(bytes: u64) -> String {
     unsafe {
@@ -234,7 +223,6 @@ pub fn file_size_label(bytes: u64) -> String {
 
 thread_local! {
     static TIME_FORMATTER: Cell<id> = const { Cell::new(nil) };
-    static APP_ICON: RefCell<Option<Option<Arc<RenderImage>>>> = const { RefCell::new(None) };
 }
 
 /// A moment as the user's locale writes a short time: "14:20" or "2:20 PM".
@@ -255,22 +243,4 @@ pub fn short_time(secs: f64) -> String {
         let date: id = msg_send![class!(NSDate), dateWithTimeIntervalSince1970: secs];
         string_of(msg_send![formatter, stringFromDate: date])
     }
-}
-
-/// The app's icon, at 64 points.
-pub fn app_icon() -> Option<Arc<RenderImage>> {
-    APP_ICON.with(|cell| {
-        cell.borrow_mut()
-            .get_or_insert_with(|| unsafe {
-                let image: id = msg_send![app(), applicationIconImage];
-                if image == nil {
-                    None
-                } else {
-                    let size = NSSize::new(64., 64.);
-                    let _: () = msg_send![image, setSize: size];
-                    fumi_ui::native::draw_to_render_image(image, size, 2.)
-                }
-            })
-            .clone()
-    })
 }

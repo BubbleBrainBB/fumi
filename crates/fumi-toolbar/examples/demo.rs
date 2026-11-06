@@ -1,6 +1,7 @@
 //! Opens the app's shell around a stand-in page, over the library in FUMI_WORKSPACE:
-//! how a root wires the toolbar, the welcome page, the menu bar and the Dock.
-use fumi_toolbar::{AppHooks, Toolbar, ToolbarEvent, Welcome};
+//! how a root wires the toolbar, the menu bar and the Dock. The app's welcome
+//! page is `fumi_settings::welcome::WelcomePage`.
+use fumi_toolbar::{AppHooks, Toolbar, ToolbarEvent};
 use fumi_workspace::{WindowStart, Workspace};
 use gpui::prelude::*;
 use gpui::*;
@@ -9,7 +10,6 @@ use std::rc::Rc;
 struct Root {
     workspace: Entity<Workspace>,
     toolbar: Entity<Toolbar>,
-    welcome: Entity<Welcome>,
     focus: FocusHandle,
     _subs: Vec<Subscription>,
 }
@@ -21,14 +21,13 @@ impl Root {
         toolbar.update(cx, |toolbar, _| {
             toolbar.set_live_text(Rc::new(|_: &App| None));
         });
-        let welcome = cx.new(|cx| Welcome::new(workspace.clone(), window, cx));
         let subs = vec![
             cx.observe(&workspace, |_, _, cx| cx.notify()),
             cx.subscribe(&toolbar, |_, _, event: &ToolbarEvent, _| eprintln!("toolbar event: {event:?}")),
         ];
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
-        Root { workspace, toolbar, welcome, focus, _subs: subs }
+        Root { workspace, toolbar, focus, _subs: subs }
     }
 }
 
@@ -40,7 +39,7 @@ impl Render for Root {
         let root = fumi_toolbar::register_actions(root, &self.toolbar, cx);
         let w = self.workspace.read(cx);
         if !w.store.is_open() {
-            return root.child(self.welcome.clone());
+            return root.p(px(40.)).child("No library open: set FUMI_WORKSPACE to a notes folder.");
         }
         let page = format!("{} notes", w.store.notes().len());
         root.flex().flex_col().child(self.toolbar.clone()).child(
