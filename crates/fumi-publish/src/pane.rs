@@ -398,7 +398,7 @@ impl PublishPane {
             && model.is_preview_open()
             && model.selected_note().is_some()
             && !model.shows_memos();
-        (shown, model.active_id().to_string(), model.search_presented || model.show_settings)
+        (shown, model.active_id().to_string(), model.search_presented || model.show_settings || model.info_presented)
     }
 
     fn target(&self, cx: &App) -> PublishTarget {
@@ -471,7 +471,7 @@ impl PublishPane {
         .detach();
     }
 
-    /// Search and Settings float above; GPUI can't draw over a web view, so it goes
+    /// Search, Settings and the Info card float above; GPUI can't draw over a web view, so it goes
     /// away while they're up and a still takes its place.
     fn set_covered(&mut self, covered: bool, window: &mut Window, cx: &mut Context<Self>) {
         if covered == self.covered {

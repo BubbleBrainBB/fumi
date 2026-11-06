@@ -58,6 +58,8 @@ pub struct AppModel {
 
     pub search_presented: bool,
     pub show_settings: bool,
+    /// The note's Info card is open over the page and any preview sheet.
+    pub info_presented: bool,
     pub sort_mode: SortMode,
     pub sidebar_visible: bool,
     /// The sidebar's first level, every library, instead of this one's files.
@@ -81,6 +83,7 @@ impl AppModel {
             new_id: Box::new(new_id),
             search_presented: false,
             show_settings: false,
+            info_presented: false,
             sort_mode: SortMode::UpdatedDesc,
             sidebar_visible: true,
             shows_libraries: false,

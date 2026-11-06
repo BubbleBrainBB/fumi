@@ -353,6 +353,7 @@ impl Toolbar {
         self.info_tab = Some(w.model.active_id().to_string());
         self.info_return_focus = window.focused(cx);
         window.focus(&self.info_focus, cx);
+        self.set_info_presented(true, cx);
         cx.notify();
     }
 
@@ -362,7 +363,19 @@ impl Toolbar {
         if let Some(focus) = self.info_return_focus.take() {
             window.focus(&focus, cx);
         }
+        self.set_info_presented(false, cx);
         cx.notify();
+    }
+
+    /// GPUI can't draw over the preview sheet's web view, so the sheet trades it
+    /// for a still while the card is up.
+    fn set_info_presented(&self, presented: bool, cx: &mut Context<Self>) {
+        self.workspace.update(cx, |w, cx| {
+            if w.model.info_presented != presented {
+                w.model.info_presented = presented;
+                cx.notify();
+            }
+        });
     }
 
     /// The trailing icon's frame in the window, `index` 0 the last.
