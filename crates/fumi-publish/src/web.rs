@@ -12,7 +12,7 @@ use futures::channel::{mpsc, oneshot};
 use fumi_ui::native::load_framework;
 use gpui::*;
 use objc::declare::ClassDecl;
-use objc::runtime::{Class, Object, Sel};
+use objc::runtime::{BOOL, Class, Object, Sel, YES};
 use objc::{class, msg_send, sel, sel_impl};
 use std::cell::Cell;
 
@@ -144,6 +144,25 @@ extern "C" fn scroll_wheel(this: &Object, _: Sel, event: id) {
     }
 }
 
+/// The page took the keyboard, by a click or otherwise: the pane hears of it as it
+/// hears of a press in the page, and takes GPUI's focus off the editor, so the keys GPUI
+/// still sees (key equivalents reach the GPUI view first) find no editor binding.
+extern "C" fn become_first_responder(this: &Object, _: Sel) -> BOOL {
+    unsafe {
+        let superclass = Class::get("WKWebView").expect("WebKit");
+        let became: BOOL = msg_send![super(this, superclass), becomeFirstResponder];
+        if became == YES {
+            let delegate: id = msg_send![this, navigationDelegate];
+            if delegate != nil
+                && let Some(sink) = sink_of(&*delegate)
+            {
+                let _ = sink.unbounded_send(WebEvent::Message(serde_json::Value::String("pointer".into())));
+            }
+        }
+        became
+    }
+}
+
 fn web_view_class() -> &'static Class {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
@@ -153,6 +172,7 @@ fn web_view_class() -> &'static Class {
         unsafe {
             decl.add_method(sel!(willOpenMenu:withEvent:), will_open_menu as extern "C" fn(&Object, Sel, id, id));
             decl.add_method(sel!(scrollWheel:), scroll_wheel as extern "C" fn(&Object, Sel, id));
+            decl.add_method(sel!(becomeFirstResponder), become_first_responder as extern "C" fn(&Object, Sel) -> BOOL);
         }
         decl.register();
     });
@@ -300,6 +320,19 @@ pub struct WebHost {
     surface: WindowCompositionSurface,
 }
 
+/// The composition surface is a subview of GPUI's view, so a key the page leaves alone
+/// would climb the responder chain into it and land in the editor. The chain skips GPUI's
+/// view instead, going on to its superview, as it did when the web view was its sibling.
+fn keep_keys_out_of_gpui(container: id, gpui_view: id) {
+    unsafe {
+        let parent: id = msg_send![gpui_view, superview];
+        let next: id = msg_send![container, nextResponder];
+        if parent != nil && next != parent {
+            let _: () = msg_send![container, setNextResponder: parent];
+        }
+    }
+}
+
 /// A native composition surface and its `NSView`; `None` if the window can't compose.
 fn native_surface(window: &Window) -> Option<(WindowCompositionSurface, id)> {
     let composition = window.enable_window_composition().map_err(|e| eprintln!("compose: {e:#}")).ok()?;
@@ -385,6 +418,7 @@ impl WebHost {
             let _: () = msg_send![container, setHidden: true];
             let _: () = msg_send![container, addSubview: web];
             let _: () = msg_send![surface_view, addSubview: container];
+            keep_keys_out_of_gpui(container, gpui_view);
             Some((
                 WebHost {
                     web,
@@ -433,6 +467,7 @@ impl WebHost {
         unsafe {
             if self.last != Some(frames) {
                 self.last = Some(frames);
+                keep_keys_out_of_gpui(self.container, self.gpui_view);
                 // The surface goes where the container would, in top-left device pixels,
                 // and the container fills it.
                 let (x, y, w, h) = frames.container;
