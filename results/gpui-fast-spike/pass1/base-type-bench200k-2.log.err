@@ -1,0 +1,2 @@
+2026-11-06 07:47:10.562 FumiGPUI[6523:70989132] TSM AdjustCapsLockLEDForKeyTransitionHandling - _ISSetPhysicalKeyboardCapsLockLED Inhibit
+2026-11-06 07:47:10.627 FumiGPUI[6523:70989132] error messaging the mach port for IMKCFRunLoopWakeUpReliable
