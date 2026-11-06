@@ -91,40 +91,7 @@ impl Press {
     }
 }
 
-/// The tooltip every control on the page uses.
-pub(crate) struct Tip(pub SharedString);
-
-impl Render for Tip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let c = t();
-        div()
-            .font(typo::ui(FontWeight::NORMAL))
-            .text_size(px(12.))
-            .line_height(px(15.))
-            .text_color(c.text)
-            .bg(c.page)
-            .border_1()
-            .border_color(c.control_border)
-            .rounded(px(5.))
-            .px(px(7.))
-            .py(px(3.))
-            .shadow(vec![BoxShadow {
-                color: hsla(0., 0., 0., 0.12),
-                offset: point(px(0.), px(2.)),
-                blur_radius: px(6.),
-                spread_radius: px(0.),
-                inset: false,
-            }])
-            .child(self.0.clone())
-    }
-}
-
-pub(crate) fn tip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
-    let text = text.into();
-    move |_, cx| cx.new(|_| Tip(text.clone())).into()
-}
-
-pub(crate) const TIP_DELAY: Duration = Duration::from_millis(900);
+pub(crate) use fumi_ui::tip::{TIP_DELAY, tip};
 
 /// A memo being edited in place.
 pub(crate) struct Edit {

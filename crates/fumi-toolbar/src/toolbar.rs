@@ -9,7 +9,7 @@ use crate::mac;
 use crate::menu_rows::{self, FileCommand, MenuSpec, NoteCommand, TabCommand};
 use crate::menus::MenuState;
 use crate::shell;
-use crate::tip::tip;
+use fumi_ui::tip::tip;
 use cocoa::base::id;
 use fumi_core::app_model::PublishTarget;
 use fumi_core::attachment_import;

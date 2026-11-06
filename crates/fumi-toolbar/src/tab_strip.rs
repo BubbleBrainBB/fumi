@@ -5,7 +5,7 @@
 use crate::labels;
 use crate::layout::{self, FLARE, LABEL_HEIGHT, TAB_HEIGHT, TAB_RADIUS};
 use crate::menu_rows::MenuSpec;
-use crate::tip::{tip, tip_with};
+use fumi_ui::tip::{tip, tip_with};
 use crate::toolbar::{Toolbar, edited};
 use fumi_core::tabs::{Content, NoteTab};
 use fumi_ui::icons::{glyph, symbol};

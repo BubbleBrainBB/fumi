@@ -133,38 +133,7 @@ pub fn edited_value(typed: &str, own: &str) -> Option<String> {
 
 // Tips -------------------------------------------------------------------------
 
-struct Tip(SharedString);
-
-impl Render for Tip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let c = t();
-        div().pl(px(8.)).pt(px(10.)).child(
-            div()
-                .max_w(px(360.))
-                .px(px(6.))
-                .py(px(3.))
-                .bg(c.page)
-                .border_1()
-                .border_color(c.control_border)
-                .rounded(px(5.))
-                .shadow(vec![BoxShadow {
-                    color: hsla(0., 0., 0., 0.14),
-                    offset: point(px(0.), px(2.)),
-                    blur_radius: px(6.),
-                    spread_radius: px(0.),
-                    inset: false,
-                }])
-                .text_size(px(11.))
-                .text_color(c.text2)
-                .child(self.0.clone()),
-        )
-    }
-}
-
-fn tip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
-    let text = text.into();
-    move |_, cx| cx.new(|_| Tip(text.clone())).into()
-}
+use fumi_ui::tip::tip;
 
 // The pane ----------------------------------------------------------------------
 

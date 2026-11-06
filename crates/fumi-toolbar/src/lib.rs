@@ -11,7 +11,6 @@ pub mod menu_rows;
 pub mod menus;
 pub mod shell;
 mod tab_strip;
-mod tip;
 pub mod toolbar;
 pub mod welcome;
 

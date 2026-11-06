@@ -25,29 +25,7 @@ pub fn body_text(text: impl Into<SharedString>) -> Div {
     div().text_size(px(13.)).line_height(px(16.)).text_color(c.text).whitespace_nowrap().child(text.into())
 }
 
-/// The system tooltip's job: a small floating label.
-pub struct Tip(pub SharedString);
-
-impl Render for Tip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let c = t();
-        div()
-            .px(px(6.))
-            .py(px(3.))
-            .rounded(px(4.))
-            .bg(c.page)
-            .border_1()
-            .border_color(c.control_border)
-            .text_size(px(11.))
-            .text_color(c.text2)
-            .whitespace_nowrap()
-            .child(self.0.clone())
-    }
-}
-
-pub fn tip(text: &'static str) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
-    move |_, cx| cx.new(|_| Tip(text.into())).into()
-}
+pub use fumi_ui::tip::tip;
 
 /// Remembers where elements landed, for what opens beside them.
 #[derive(Clone, Default)]

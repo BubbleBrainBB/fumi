@@ -778,7 +778,7 @@ impl SettingsSheet {
                 .justify_center()
                 .rounded_full()
                 .cursor_pointer()
-                .tooltip(tip(name))
+                .tooltip(tip(*name))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.change(SettingsChange::Appearance, window, cx, |_| s::set_string(keys::ACCENT, hex));
                 }))
