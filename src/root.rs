@@ -386,8 +386,17 @@ impl Render for RootView {
             layer(shell)
                 .child(div().size_full().flex().child(sidebar).child(detail))
             .child(self.caret.clone())
-                .child(self.search.clone())
-                .child(self.sheet.clone()),
+                .children(overlays(self.search.clone().into_any_element(), self.sheet.clone().into_any_element())),
         )
+    }
+}
+
+/// gpui-fast spike: with composition, Search and Settings must be deferred draws to land on
+/// the overlay surface above a web view; otherwise they stay plain children, as before.
+fn overlays(search: AnyElement, sheet: AnyElement) -> Vec<AnyElement> {
+    if fumi_publish::web::composing() {
+        vec![deferred(search).into_any_element(), deferred(sheet).into_any_element()]
+    } else {
+        vec![search, sheet]
     }
 }

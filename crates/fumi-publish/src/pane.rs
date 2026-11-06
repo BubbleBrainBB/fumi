@@ -474,6 +474,8 @@ impl PublishPane {
     /// Search, Settings and the Info card float above; GPUI can't draw over a web view, so it goes
     /// away while they're up and a still takes its place.
     fn set_covered(&mut self, covered: bool, window: &mut Window, cx: &mut Context<Self>) {
+        // gpui-fast spike: with composition the overlays draw above the live page.
+        let covered = covered && !web::composing();
         if covered == self.covered {
             return;
         }
