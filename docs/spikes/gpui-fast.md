@@ -1,5 +1,7 @@
 # gpui-fast 试验
 
+> **历史记录。** 2026-11-06 决定迁移，`gpui-fast` 分支已经换过去：窗口合成默认开启，`FUMI_COMPOSE` 开关和快照绕法都已删除，scroll layers 在 `main` 里关掉。下文是迁移前的评估，保留不改；现状见 README 的 “GPUI” 一节。
+
 日期 2026-11-06。分支 `spike/gpui-fast`，基于 `098e472`。机器 M4 Max，macOS 27，Rust 1.95（没改默认工具链）。
 gpui-fast 用 crates.io 上的 0.1.13（对应仓库 HEAD `a10f393`）。原始数据和脚本在 `results/gpui-fast-spike/`。
 

@@ -1,6 +1,6 @@
 # Fumi
 
-Fumi (文, "writing") is a calm Markdown notes app for macOS, written in Rust on [GPUI](https://www.gpui.rs). Your notes are plain `.md` files in a folder on your Mac — open the same folder in Obsidian or any editor.
+Fumi (文, "writing") is a calm Markdown notes app for macOS, written in Rust on [GPUI](https://www.gpui.rs), through Longbridge's [gpui-fast](https://github.com/longbridge/gpui-fast) fork. Your notes are plain `.md` files in a folder on your Mac — open the same folder in Obsidian or any editor.
 
 Up to 0.3.2 Fumi was a SwiftUI and AppKit app; that code is in this repository's history and the `v0.3.x` tags. 0.4.0 is the same app rebuilt in Rust, with the same features and look, and much faster on large notes.
 
@@ -33,6 +33,19 @@ open target/FumiGPUI.app
 ```
 
 `scripts/bundle.sh` makes a test bundle with its own id (`com.fumi.gpui-prototype`), so it keeps settings apart from an installed Fumi. `FUMI_WORKSPACE=<folder>` opens a library without touching the one in Settings.
+
+## GPUI
+
+Fumi builds on gpui-fast 0.1.13 rather than the `gpui-pre` snapshot: `Cargo.toml` aliases `gpui` and `gpui_platform` to `gpui-fast` and `gpui-fast-platform`. What that changes:
+
+- **Window composition.** The publish pane's web views live in a native composition surface, so Search, Settings, the Info card and menus, all deferred draws, paint above the live page. A view drawn over a web view has to be deferred to land above it.
+- **Retained views.** A view whose entities, globals and list or scroll state didn't change is drawn from the last frame. Render state kept anywhere else (a `thread_local`, an `Rc<RefCell>`, the time) needs a `cx.notify()` when it changes, or the view keeps showing the old frame. `GPUI_VIEW_RETENTION=0` turns retention off, to tell whether a stale frame comes from it.
+- **Scroll layers are off.** `main` sets `GPUI_SCROLL_LAYERS=0` before GPUI starts (an explicit value in the environment wins): with them on, typing in the editor's list was about 1 ms slower per frame and hitched 20–80 ms once per session. `docs/spikes/gpui-fast.md` has the measurements.
+
+Two patches in `vendor/`, both in `[patch.crates-io]`:
+
+- `gpui-fast-macos` with three `Option::map_or_default` calls replaced, as that API isn't stable on Rust 1.95. Drop it on Rust 1.99.
+- `gpui-fast-compat/gpui-pre`, a stand-in for `gpui-pre` that re-exports gpui-fast, so `ratex-gpui` doesn't build a second GPUI.
 
 ## Release
 
@@ -68,9 +81,10 @@ Benchmarks: `scripts/matrix.sh` drives the editor alone; `BENCH_SCENARIO=type BE
 ├── resources/           # App icon
 ├── scripts/             # Bundle, release, benchmarks
 ├── tools/               # WeChat renderer build, app icon generator
-├── vendor/              # A patched GPUI platform crate
+├── vendor/              # Patched gpui-fast macOS crate, gpui-pre stand-in
 ├── PARITY.md            # The checklist the rebuild was held to, against the Swift app
-└── docs/parity-audit/   # Where the rebuild was checked against it
+├── docs/parity-audit/   # Where the rebuild was checked against it
+└── docs/spikes/         # gpui-fast evaluation (history)
 ```
 
 ## License
