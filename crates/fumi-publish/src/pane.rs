@@ -1162,6 +1162,8 @@ impl PublishPane {
         settings::set_dict_string(PUBLISH_TARGETS, "", raw);
         self.refresh(cx);
         cx.notify();
+        // The toolbar and the menu bar read the target from settings too.
+        self.workspace.update(cx, |_, cx| cx.notify());
     }
 
     /// Heads each platform name for what it should be now.

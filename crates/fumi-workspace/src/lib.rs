@@ -223,6 +223,8 @@ impl Workspace {
             settings::note_recent_workspace(&key);
         }
         libraries::with(|list| list.add(&key));
+        // Every window's library list reads it.
+        cx.refresh_windows();
         self.store.open_workspace(path, load_pins(&key));
         self.missing_workspace = None;
         self.watcher = Watcher::with_wake(path, Some(self.wake.clone()));

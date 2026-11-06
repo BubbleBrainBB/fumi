@@ -187,10 +187,19 @@ impl RootView {
                     }
                 }
             }),
-            SettingsChange::Publish => {
-                self.publish.update(cx, |p, cx| p.settings_changed(cx));
-                cx.notify();
-            }
+            // Every window's pane, toolbar (a cached view that reads the extension
+            // settings) and actions follow, not only this one's.
+            SettingsChange::Publish => cx.defer(|cx| {
+                for handle in cx.windows() {
+                    if let Some(root) = handle.downcast::<RootView>() {
+                        let _ = root.update(cx, |root, _, cx| {
+                            root.publish.update(cx, |p, cx| p.settings_changed(cx));
+                            root.toolbar.update(cx, |_, cx| cx.notify());
+                            cx.notify();
+                        });
+                    }
+                }
+            }),
         }
     }
 

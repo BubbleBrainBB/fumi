@@ -515,6 +515,9 @@ impl SidebarView {
         let mut running = false;
         if self.width.is_some_and(|timed| timed.done()) {
             self.width = None;
+            // Root reads the width as it renders, just before this; one more frame lets it
+            // see the settled value instead of the last step of the tween.
+            window.request_animation_frame();
         }
         running |= self.width.is_some();
         if self.slide.is_some_and(|timed| timed.done()) {
