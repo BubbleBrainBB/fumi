@@ -2580,7 +2580,7 @@ impl Editor {
                 .h(px(FADE_BAND))
                 .flex()
                 .flex_col()
-                .child(div().w_full().h(px(first)).flex_none().bg(wash(0.8, 0.3)))
+                .child(div().w_full().h(px(first)).flex_none().rounded_t(px(fumi_ui::theme::PAGE_INNER_RADIUS)).bg(wash(0.8, 0.3)))
                 .child(div().w_full().h(px(second)).flex_none().bg(wash(0.3, 0.))),
         )
     }

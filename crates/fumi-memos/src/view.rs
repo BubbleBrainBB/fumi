@@ -783,7 +783,8 @@ impl MemosView {
                 .right_0()
                 .flex()
                 .flex_col()
-                .child(band(12., 0.8, 0.3))
+                // The page's corners, as the page's own fill rounds them.
+                .child(band(12., 0.8, 0.3).rounded_t(px(fumi_ui::theme::PAGE_INNER_RADIUS)))
                 .child(band(10.5, 0.3, 0.)),
         )
     }
