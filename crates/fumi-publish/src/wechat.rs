@@ -23,6 +23,9 @@ fn skill_asset(relative: &str) -> Option<&'static str> {
         "assets/themes/blueprint.json" => include_str!("../resources/WeChat/assets/themes/blueprint.json"),
         "assets/themes/motion-journal.json" => include_str!("../resources/WeChat/assets/themes/motion-journal.json"),
         "assets/themes/songti-supplement.json" => include_str!("../resources/WeChat/assets/themes/songti-supplement.json"),
+        "assets/themes/folio.json" => include_str!("../resources/WeChat/assets/themes/folio.json"),
+        "assets/themes/celadon.json" => include_str!("../resources/WeChat/assets/themes/celadon.json"),
+        "assets/themes/zine.json" => include_str!("../resources/WeChat/assets/themes/zine.json"),
         _ => return None,
     })
 }
@@ -34,10 +37,14 @@ pub enum Theme {
     Blueprint,
     Songti,
     MotionJournal,
+    Folio,
+    Celadon,
+    Zine,
 }
 
 impl Theme {
-    pub const ALL: [Theme; 4] = [Theme::BlackRed, Theme::Blueprint, Theme::Songti, Theme::MotionJournal];
+    pub const ALL: [Theme; 7] =
+        [Theme::BlackRed, Theme::Blueprint, Theme::Songti, Theme::MotionJournal, Theme::Folio, Theme::Celadon, Theme::Zine];
 
     pub fn raw(self) -> &'static str {
         match self {
@@ -45,6 +52,9 @@ impl Theme {
             Theme::Blueprint => "blueprint",
             Theme::Songti => "songti-supplement",
             Theme::MotionJournal => "motion-journal",
+            Theme::Folio => "folio",
+            Theme::Celadon => "celadon",
+            Theme::Zine => "zine",
         }
     }
 
@@ -59,6 +69,9 @@ impl Theme {
             Theme::Blueprint => "Blueprint",
             Theme::Songti => "Songti",
             Theme::MotionJournal => "Motion",
+            Theme::Folio => "Folio",
+            Theme::Celadon => "Celadon",
+            Theme::Zine => "Zine",
         }
     }
 
@@ -69,6 +82,9 @@ impl Theme {
             Theme::Blueprint => 0x2455D6,
             Theme::Songti => 0xBD3038,
             Theme::MotionJournal => 0x435924,
+            Theme::Folio => 0xA86B1F,
+            Theme::Celadon => 0x3E7C72,
+            Theme::Zine => 0xFF4FA0,
         }
     }
 }
@@ -407,6 +423,23 @@ mod tests {
         }
         let hex = format!("{:06x}", Theme::Blueprint.accent());
         assert!(blocking("**b**", "/tmp/n.md", Theme::Blueprint).unwrap().html.to_lowercase().contains(&hex));
+    }
+
+    #[test]
+    fn folio_celadon_and_zine_draw_their_own_marks() {
+        let note = "# T\n\nLead.\n\n## One\n\n## Two\n\n---\n\n> [!END]\n> Bye.";
+        for (theme, number, divider, end) in [
+            (Theme::Folio, "— II —", "· · ·", "（完）"),
+            (Theme::Celadon, ">2</span>", "◇ ◇ ◇", ">END</p>"),
+            (Theme::Zine, ">02</span>", "★ ★ ★", ">THE END</p>"),
+        ] {
+            let html = blocking(note, "/tmp/n.md", theme).unwrap().html;
+            assert!(html.contains(&format!("data-template=\"{}\"", theme.raw())), "{theme:?}");
+            for mark in [number, divider, end] {
+                assert!(html.contains(mark), "{theme:?} lacks {mark}");
+            }
+            assert!(!html.contains("<hr"), "{theme:?}");
+        }
     }
 
     #[test]

@@ -313,9 +313,9 @@ pub fn theme_swatch(theme: Theme) -> id {
 }
 
 /// The swatches, made once.
-pub fn theme_swatches() -> [id; 4] {
+pub fn theme_swatches() -> [id; Theme::ALL.len()] {
     thread_local! {
-        static SWATCHES: [usize; 4] = Theme::ALL.map(|t| theme_swatch(t) as usize);
+        static SWATCHES: [usize; Theme::ALL.len()] = Theme::ALL.map(|t| theme_swatch(t) as usize);
     }
     SWATCHES.with(|s| s.map(|i| i as id))
 }

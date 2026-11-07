@@ -62,11 +62,14 @@ pub const ACCENTS: [(&str, &str); 5] =
     [("Blue", "#1D6FC2"), ("Ink", INK_ACCENT), ("Green", "#448361"), ("Purple", "#9065B0"), ("Red", "#C4402F")];
 pub const LINE_SPACINGS: [(&str, f64); 3] = [("Compact", 1.4), ("Cozy", 1.7), ("Relaxed", 2.0)];
 pub const LINE_LENGTHS: [(&str, &str); 3] = [("Narrow", "narrow"), ("Medium", "medium"), ("Wide", "wide")];
-pub const WECHAT_THEMES: [(&str, &str); 4] = [
+pub const WECHAT_THEMES: [(&str, &str); 7] = [
     ("Black Red", "black-red"),
     ("Blueprint", "blueprint"),
     ("Songti", "songti-supplement"),
     ("Motion", "motion-journal"),
+    ("Folio", "folio"),
+    ("Celadon", "celadon"),
+    ("Zine", "zine"),
 ];
 pub const XHS_TEMPLATES: [(&str, &str); 4] = [("Memo", "memo"), ("Grid", "grid"), ("Post", "post"), ("Post Dark", "postDark")];
 pub const XHS_RATIOS: [&str; 2] = ["3:4", "1:1"];

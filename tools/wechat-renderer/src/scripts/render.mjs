@@ -8,13 +8,16 @@ import { prepareVideos, videoChecklist } from './videos.mjs';
 import { prepareFlows } from './flows.mjs';
 
 const skillDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const themeFiles = { 'black-red': 'theme.json', 'blueprint': 'themes/blueprint.json', 'songti-supplement': 'themes/songti-supplement.json', 'motion-journal': 'themes/motion-journal.json' };
+const themeFiles = { 'black-red': 'theme.json', 'blueprint': 'themes/blueprint.json', 'songti-supplement': 'themes/songti-supplement.json', 'motion-journal': 'themes/motion-journal.json', 'folio': 'themes/folio.json', 'celadon': 'themes/celadon.json', 'zine': 'themes/zine.json' };
 const canonicalTheme = name => name === 'paper-notes' ? 'blueprint' : name;
 export function loadTheme(name = 'black-red') {
   name = canonicalTheme(name);
-  if (!Object.hasOwn(themeFiles, name)) throw new Error(`未知主题：${name}；可选 black-red、blueprint、songti-supplement、motion-journal。`);
+  if (!Object.hasOwn(themeFiles, name)) throw new Error(`未知主题：${name}；可选 black-red、blueprint、songti-supplement、motion-journal、folio、celadon、zine。`);
   return JSON.parse(fs.readFileSync(path.join(skillDir, 'assets', themeFiles[name]), 'utf8'));
 }
+const ROMAN = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII', 'XIII', 'XIV', 'XV', 'XVI', 'XVII', 'XVIII', 'XIX', 'XX'];
+// A theme's headingNumberText: {nn} is 01, {n} is 1, {roman} is I. Without one, 01.
+const numberText = (template = '{nn}', n) => template.replaceAll('{nn}', String(n).padStart(2, '0')).replaceAll('{n}', String(n)).replaceAll('{roman}', ROMAN[n] || String(n));
 const hash = value => createHash('sha256').update(value).digest('hex');
 const escape = value => String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const wrap = (tag, style, content, attrs = '') => `<${tag} style="${escape(style)}"${attrs}>${content}</${tag}>`;
@@ -266,7 +269,7 @@ export function renderArticle(raw, { inputPath = path.resolve('article.md'), ima
     const tag = tokens[i].tag;
     if (tag === 'h2') env.sections++;
     const marker = tag === 'h2' && theme.headingNumbered
-      ? wrap('span', s.headingNumber, String(env.sections).padStart(2, '0'), ' data-theme-ornament="heading" aria-hidden="true"')
+      ? wrap('span', s.headingNumber, escape(numberText(theme.headingNumberText, env.sections)), ' data-theme-ornament="heading" aria-hidden="true"')
       : tag === 'h3' && s.h3Marker ? wrap('span', s.h3Marker, escape(theme.h3MarkerText || '/'), ' data-theme-ornament="subheading" aria-hidden="true"') : '';
     const anchor = tokens[i].attrGet('id');
     return `<${tag} style="${escape(s[tag] + (anchor ? 'scroll-margin-top:24px;' : ''))}"${anchor ? ` id="${escape(anchor)}"` : ''}>${marker}`;
@@ -274,8 +277,19 @@ export function renderArticle(raw, { inputPath = path.resolve('article.md'), ima
   md.renderer.rules.heading_close = (tokens, i) => `</${tokens[i].tag}>\n`;
   md.renderer.rules.paragraph_open = (tokens, i) => {
     if (tokens[i].hidden || tokens[i].meta?.imageOnly) return '';
-    const quote = tokens.slice(0, i).reduce((count, t) => count + (t.type === 'blockquote_open' ? 1 : t.type === 'blockquote_close' ? -1 : 0), 0);
-    return `<p style="${escape(quote ? s.quoteParagraph : s.paragraph)}">`;
+    let quote = 0, kind = null, headingBefore = false, paragraphBefore = false;
+    for (const t of tokens.slice(0, i)) {
+      if (t.type === 'blockquote_open') { quote++; if (t.meta?.callout) kind = t.meta.callout; }
+      if (t.type === 'blockquote_close') { quote--; if (t.meta?.callout) kind = null; }
+      if (t.type === 'heading_open') headingBefore = true;
+      if (t.type === 'paragraph_open' && !t.hidden) paragraphBefore = true;
+    }
+    // Optional theme styles: lead for the first paragraph before any heading;
+    // calloutParagraph and endParagraph inside those blocks. Each falls back.
+    const style = quote
+      ? (kind === 'END' ? s.endParagraph : kind ? s.calloutParagraph : null) || s.quoteParagraph
+      : (!headingBefore && !paragraphBefore && s.lead) || s.paragraph;
+    return `<p style="${escape(style)}">`;
   };
   md.renderer.rules.paragraph_close = (tokens, i) => tokens[i].hidden || tokens[i].meta?.imageOnly ? '\n' : '</p>\n';
   md.renderer.rules.blockquote_open = (tokens, i) => {
@@ -284,7 +298,8 @@ export function renderArticle(raw, { inputPath = path.resolve('article.md'), ima
     if (!kind) return `<blockquote style="${escape(s.quote)}">` + (s.quoteMark ? wrap('span', s.quoteMark, '“', ' data-theme-ornament="quote" aria-hidden="true"') : '');
     const titleTokens = tokens[i].meta.titleTokens;
     const title = titleTokens.length ? wrap('p', s.calloutTitle, md.renderer.renderInline(titleTokens, md.options, env)) : '';
-    return `<section style="${escape(kind === 'END' ? s.end : s.callout)}">${title}`;
+    const endMark = kind === 'END' && s.endMark ? wrap('p', s.endMark, escape(theme.endMarkText || 'END'), ' data-theme-ornament="end" aria-hidden="true"') : '';
+    return `<section style="${escape(kind === 'END' ? s.end : s.callout)}">${endMark}${title}`;
   };
   md.renderer.rules.blockquote_close = (tokens, i) => tokens[i].meta?.scrollQuote ? '</section></section>\n' : tokens[i].meta?.callout ? '</section>\n' : '</blockquote>\n';
   md.renderer.rules.image = (tokens, i, options, env, self) => {
@@ -310,7 +325,8 @@ export function renderArticle(raw, { inputPath = path.resolve('article.md'), ima
   }
   md.renderer.rules.fence = code;
   md.renderer.rules.code_block = code;
-  md.renderer.rules.hr = () => `<hr style="${escape(s.hr)}" />\n`;
+  // A theme's hrText draws the divider as a line of characters (· · ·) in place of a rule.
+  md.renderer.rules.hr = () => theme.hrText ? wrap('p', s.hr, escape(theme.hrText), ' data-theme-ornament="divider" aria-hidden="true"') + '\n' : `<hr style="${escape(s.hr)}" />\n`;
   md.renderer.rules.table_open = () => `<section style="${escape(s.tableWrap)}"><table style="${escape(s.table)}">`;
   md.renderer.rules.table_close = () => '</table></section>\n';
   const body = md.renderer.render(tokens, md.options, env);
@@ -351,7 +367,7 @@ export function buildPreview({ html, title, report }) {
 function main() {
   const args = process.argv.slice(2);
   if (args.includes('--help')) {
-    console.log('node render.mjs --input /path/article.md --out-dir /path/output [--theme black-red|blueprint|songti-supplement|motion-journal] [--image-map /path/images.json] [--toc] [--scroll-long-quotes] [--overwrite]\n固定主题：black-red 黑红刊刻风（默认）、blueprint 蓝图档案、songti-supplement 宋体副刊、motion-journal 动态实验刊；旧参数 paper-notes 映射到 blueprint。--toc 开启固定高度滚动目录，可用独立 <!-- toc --> 指定位置，默认在首个 H2 前；复制时保留滚动样式。图片映射为 JSON 对象：原始路径 -> HTTPS 图床地址。未映射本地图片将嵌入正文并允许复制，公众号接收效果需实测。流程动画使用 wechat-flow 围栏（YAML title/steps/returnLabel，四节点固定布局）。视频使用 wechat-video 围栏（YAML title/source），或独立视频链接/嵌入。输出 article.html、preview.html、title.txt、report.json、videos.md、videos.json；视频保留为待插入占位卡，不上传或嵌入播放器。');
+    console.log('node render.mjs --input /path/article.md --out-dir /path/output [--theme black-red|blueprint|songti-supplement|motion-journal|folio|celadon|zine] [--image-map /path/images.json] [--toc] [--scroll-long-quotes] [--overwrite]\n固定主题：black-red 黑红刊刻风（默认）、blueprint 蓝图档案、songti-supplement 宋体副刊、motion-journal 动态实验刊、folio 刊物、celadon 青瓷、zine 撞色；旧参数 paper-notes 映射到 blueprint。--toc 开启固定高度滚动目录，可用独立 <!-- toc --> 指定位置，默认在首个 H2 前；复制时保留滚动样式。图片映射为 JSON 对象：原始路径 -> HTTPS 图床地址。未映射本地图片将嵌入正文并允许复制，公众号接收效果需实测。流程动画使用 wechat-flow 围栏（YAML title/steps/returnLabel，四节点固定布局）。视频使用 wechat-video 围栏（YAML title/source），或独立视频链接/嵌入。输出 article.html、preview.html、title.txt、report.json、videos.md、videos.json；视频保留为待插入占位卡，不上传或嵌入播放器。');
     return;
   }
   const options = {};

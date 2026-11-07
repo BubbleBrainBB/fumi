@@ -21,7 +21,7 @@ if (typeof globalThis.URL === 'undefined') {
 }
 
 (() => {
-  // Tools/wechat-renderer/shims/fs.mjs
+  // tools/wechat-renderer/shims/fs.mjs
   var SKILL = "/__skill/";
   var host = () => globalThis.__fumiHost;
   var FileBytes = class {
@@ -59,7 +59,7 @@ if (typeof globalThis.URL === 'undefined') {
   }
   var fs_default = { readFileSync, existsSync, statSync, realpathSync, lstatSync, mkdirSync, writeFileSync };
 
-  // Tools/wechat-renderer/shims/path.mjs
+  // tools/wechat-renderer/shims/path.mjs
   function normalizeParts(parts, absolute) {
     const out = [];
     for (const part of parts) {
@@ -106,10 +106,10 @@ if (typeof globalThis.URL === 'undefined') {
   var sep = "/";
   var path_default = { normalize, join, resolve, dirname, basename, extname, sep };
 
-  // Tools/wechat-renderer/shims/url.mjs
+  // tools/wechat-renderer/shims/url.mjs
   var fileURLToPath = () => "/__skill/scripts/render.mjs";
 
-  // Tools/wechat-renderer/shims/crypto.mjs
+  // tools/wechat-renderer/shims/crypto.mjs
   function createHash(algorithm) {
     if (algorithm !== "sha256") throw new Error(`Fumi: unsupported hash ${algorithm}`);
     let value = "";
@@ -125,7 +125,7 @@ if (typeof globalThis.URL === 'undefined') {
     };
   }
 
-  // Tools/wechat-renderer/shims/module.mjs
+  // tools/wechat-renderer/shims/module.mjs
   function createRequire() {
     return (id) => {
       if (id === "process") return globalThis.process;
@@ -134,7 +134,7 @@ if (typeof globalThis.URL === 'undefined') {
     };
   }
 
-  // Tools/wechat-renderer/src/vendor/parsers.mjs
+  // tools/wechat-renderer/src/vendor/parsers.mjs
   var import_meta = {};
   var require2 = createRequire(import_meta.url);
   var __create = Object.create;
@@ -12607,7 +12607,7 @@ ${end.comment}` : end.comment;
   var import_yaml = __toESM(require_dist(), 1);
   var export_parseYaml = import_yaml.parse;
 
-  // Tools/wechat-renderer/node_modules/get-east-asian-width/lookup-data.js
+  // tools/wechat-renderer/node_modules/get-east-asian-width/lookup-data.js
   var ambiguousMinimalCodePoint = 161;
   var ambiguousMaximumCodePoint = 1114109;
   var ambiguousRanges = [161, 161, 164, 164, 167, 168, 170, 170, 173, 174, 176, 180, 182, 186, 188, 191, 198, 198, 208, 208, 215, 216, 222, 225, 230, 230, 232, 234, 236, 237, 240, 240, 242, 243, 247, 250, 252, 252, 254, 254, 257, 257, 273, 273, 275, 275, 283, 283, 294, 295, 299, 299, 305, 307, 312, 312, 319, 322, 324, 324, 328, 331, 333, 333, 338, 339, 358, 359, 363, 363, 462, 462, 464, 464, 466, 466, 468, 468, 470, 470, 472, 472, 474, 474, 476, 476, 593, 593, 609, 609, 708, 708, 711, 711, 713, 715, 717, 717, 720, 720, 728, 731, 733, 733, 735, 735, 768, 879, 913, 929, 931, 937, 945, 961, 963, 969, 1025, 1025, 1040, 1103, 1105, 1105, 8208, 8208, 8211, 8214, 8216, 8217, 8220, 8221, 8224, 8226, 8228, 8231, 8240, 8240, 8242, 8243, 8245, 8245, 8251, 8251, 8254, 8254, 8308, 8308, 8319, 8319, 8321, 8324, 8364, 8364, 8451, 8451, 8453, 8453, 8457, 8457, 8467, 8467, 8470, 8470, 8481, 8482, 8486, 8486, 8491, 8491, 8531, 8532, 8539, 8542, 8544, 8555, 8560, 8569, 8585, 8585, 8592, 8601, 8632, 8633, 8658, 8658, 8660, 8660, 8679, 8679, 8704, 8704, 8706, 8707, 8711, 8712, 8715, 8715, 8719, 8719, 8721, 8721, 8725, 8725, 8730, 8730, 8733, 8736, 8739, 8739, 8741, 8741, 8743, 8748, 8750, 8750, 8756, 8759, 8764, 8765, 8776, 8776, 8780, 8780, 8786, 8786, 8800, 8801, 8804, 8807, 8810, 8811, 8814, 8815, 8834, 8835, 8838, 8839, 8853, 8853, 8857, 8857, 8869, 8869, 8895, 8895, 8978, 8978, 9312, 9449, 9451, 9547, 9552, 9587, 9600, 9615, 9618, 9621, 9632, 9633, 9635, 9641, 9650, 9651, 9654, 9655, 9660, 9661, 9664, 9665, 9670, 9672, 9675, 9675, 9678, 9681, 9698, 9701, 9711, 9711, 9733, 9734, 9737, 9737, 9742, 9743, 9756, 9756, 9758, 9758, 9792, 9792, 9794, 9794, 9824, 9825, 9827, 9829, 9831, 9834, 9836, 9837, 9839, 9839, 9886, 9887, 9919, 9919, 9926, 9933, 9935, 9939, 9941, 9953, 9955, 9955, 9960, 9961, 9963, 9969, 9972, 9972, 9974, 9977, 9979, 9980, 9982, 9983, 10045, 10045, 10102, 10111, 11094, 11097, 12872, 12879, 57344, 63743, 65024, 65039, 65533, 65533, 127232, 127242, 127248, 127277, 127280, 127337, 127344, 127373, 127375, 127376, 127387, 127404, 917760, 917999, 983040, 1048573, 1048576, 1114109];
@@ -12624,7 +12624,7 @@ ${end.comment}` : end.comment;
   var wideMaximumCodePoint = 262141;
   var wideRanges = [4352, 4447, 8986, 8987, 9001, 9002, 9193, 9196, 9200, 9200, 9203, 9203, 9725, 9726, 9748, 9749, 9776, 9783, 9800, 9811, 9855, 9855, 9866, 9871, 9875, 9875, 9889, 9889, 9898, 9899, 9917, 9918, 9924, 9925, 9934, 9934, 9940, 9940, 9962, 9962, 9970, 9971, 9973, 9973, 9978, 9978, 9981, 9981, 9989, 9989, 9994, 9995, 10024, 10024, 10060, 10060, 10062, 10062, 10067, 10069, 10071, 10071, 10133, 10135, 10160, 10160, 10175, 10175, 11035, 11036, 11088, 11088, 11093, 11093, 11904, 11929, 11931, 12019, 12032, 12245, 12272, 12287, 12289, 12350, 12353, 12438, 12441, 12543, 12549, 12591, 12593, 12686, 12688, 12773, 12783, 12830, 12832, 12871, 12880, 42124, 42128, 42182, 43360, 43388, 44032, 55203, 63744, 64255, 65040, 65049, 65072, 65106, 65108, 65126, 65128, 65131, 94176, 94180, 94192, 94198, 94208, 101594, 101631, 101664, 101760, 101874, 101888, 102801, 102816, 102866, 110576, 110579, 110581, 110587, 110589, 110590, 110592, 110888, 110898, 110898, 110928, 110930, 110933, 110933, 110948, 110952, 110960, 111355, 119552, 119638, 119648, 119670, 126980, 126980, 127183, 127183, 127374, 127374, 127377, 127386, 127406, 127406, 127488, 127490, 127504, 127547, 127552, 127560, 127568, 127569, 127584, 127589, 127744, 127776, 127789, 127797, 127799, 127868, 127870, 127891, 127904, 127946, 127951, 127955, 127968, 127984, 127988, 127988, 127992, 128062, 128064, 128064, 128066, 128252, 128255, 128317, 128331, 128334, 128336, 128359, 128378, 128378, 128405, 128406, 128420, 128420, 128507, 128591, 128640, 128709, 128716, 128716, 128720, 128722, 128725, 128729, 128732, 128735, 128747, 128748, 128756, 128764, 128986, 128986, 128992, 129003, 129008, 129008, 129292, 129338, 129340, 129349, 129351, 129535, 129648, 129660, 129664, 129734, 129736, 129736, 129740, 129757, 129759, 129771, 129775, 129786, 131072, 196605, 196608, 262141];
 
-  // Tools/wechat-renderer/node_modules/get-east-asian-width/utilities.js
+  // tools/wechat-renderer/node_modules/get-east-asian-width/utilities.js
   var isInRange = (ranges, codePoint) => {
     let low = 0;
     let high = Math.floor(ranges.length / 2) - 1;
@@ -12642,7 +12642,7 @@ ${end.comment}` : end.comment;
     return false;
   };
 
-  // Tools/wechat-renderer/node_modules/get-east-asian-width/lookup.js
+  // tools/wechat-renderer/node_modules/get-east-asian-width/lookup.js
   var commonCjkCodePoint = 19968;
   var [wideFastPathStart, wideFastPathEnd] = /* @__PURE__ */ findWideFastPathRange(wideRanges);
   function findWideFastPathRange(ranges) {
@@ -12713,7 +12713,7 @@ ${end.comment}` : end.comment;
     return "neutral";
   }
 
-  // Tools/wechat-renderer/node_modules/get-east-asian-width/index.js
+  // tools/wechat-renderer/node_modules/get-east-asian-width/index.js
   function validate(codePoint) {
     if (!Number.isSafeInteger(codePoint)) {
       throw new TypeError(`Expected a code point, got \`${typeof codePoint}\`.`);
@@ -12724,7 +12724,7 @@ ${end.comment}` : end.comment;
     return getCategory(codePoint);
   }
 
-  // Tools/wechat-renderer/node_modules/markdown-it-cjk-friendly/dist/index.js
+  // tools/wechat-renderer/node_modules/markdown-it-cjk-friendly/dist/index.js
   function isEmoji(uc) {
     return new RegExp("^\\p{Emoji_Presentation}", "u").test(String.fromCodePoint(uc));
   }
@@ -12814,7 +12814,7 @@ ${end.comment}` : end.comment;
     return new lib_default(options).use(markdownItCjkFriendlyPlugin);
   }
 
-  // Tools/wechat-renderer/src/scripts/videos.mjs
+  // tools/wechat-renderer/src/scripts/videos.mjs
   var escape = (value) => String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   var markdownEscape = (value) => String(value).replace(/([\\`*_{}\[\]<>#!|])/g, "\\$1").replace(/[\r\n]+/g, " ");
   function isVideoSource(source) {
@@ -12929,7 +12929,7 @@ ${end.comment}` : end.comment;
     return lines.join("\n");
   }
 
-  // Tools/wechat-renderer/src/scripts/flows.mjs
+  // tools/wechat-renderer/src/scripts/flows.mjs
   var escape3 = (value) => String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   var text2 = (value, name, max) => {
     if (typeof value !== "string" || !value.trim() || [...value.trim()].length > max || /[\r\n\x00-\x1f]/.test(value)) {
@@ -13002,16 +13002,18 @@ ${end.comment}` : end.comment;
 `;
   }
 
-  // Tools/wechat-renderer/src/scripts/render.mjs
+  // tools/wechat-renderer/src/scripts/render.mjs
   var import_meta2 = {};
   var skillDir = path_default.resolve(path_default.dirname(fileURLToPath(import_meta2.url)), "..");
-  var themeFiles = { "black-red": "theme.json", "blueprint": "themes/blueprint.json", "songti-supplement": "themes/songti-supplement.json", "motion-journal": "themes/motion-journal.json" };
+  var themeFiles = { "black-red": "theme.json", "blueprint": "themes/blueprint.json", "songti-supplement": "themes/songti-supplement.json", "motion-journal": "themes/motion-journal.json", "folio": "themes/folio.json", "celadon": "themes/celadon.json", "zine": "themes/zine.json" };
   var canonicalTheme = (name) => name === "paper-notes" ? "blueprint" : name;
   function loadTheme(name = "black-red") {
     name = canonicalTheme(name);
-    if (!Object.hasOwn(themeFiles, name)) throw new Error(`\u672A\u77E5\u4E3B\u9898\uFF1A${name}\uFF1B\u53EF\u9009 black-red\u3001blueprint\u3001songti-supplement\u3001motion-journal\u3002`);
+    if (!Object.hasOwn(themeFiles, name)) throw new Error(`\u672A\u77E5\u4E3B\u9898\uFF1A${name}\uFF1B\u53EF\u9009 black-red\u3001blueprint\u3001songti-supplement\u3001motion-journal\u3001folio\u3001celadon\u3001zine\u3002`);
     return JSON.parse(fs_default.readFileSync(path_default.join(skillDir, "assets", themeFiles[name]), "utf8"));
   }
+  var ROMAN = ["", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII", "XIII", "XIV", "XV", "XVI", "XVII", "XVIII", "XIX", "XX"];
+  var numberText = (template = "{nn}", n) => template.replaceAll("{nn}", String(n).padStart(2, "0")).replaceAll("{n}", String(n)).replaceAll("{roman}", ROMAN[n] || String(n));
   var hash = (value) => createHash("sha256").update(value).digest("hex");
   var escape4 = (value) => String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   var wrap = (tag, style, content, attrs = "") => `<${tag} style="${escape4(style)}"${attrs}>${content}</${tag}>`;
@@ -13267,7 +13269,7 @@ ${end.comment}` : end.comment;
     md.renderer.rules.heading_open = (tokens2, i) => {
       const tag = tokens2[i].tag;
       if (tag === "h2") env.sections++;
-      const marker2 = tag === "h2" && theme.headingNumbered ? wrap("span", s.headingNumber, String(env.sections).padStart(2, "0"), ' data-theme-ornament="heading" aria-hidden="true"') : tag === "h3" && s.h3Marker ? wrap("span", s.h3Marker, escape4(theme.h3MarkerText || "/"), ' data-theme-ornament="subheading" aria-hidden="true"') : "";
+      const marker2 = tag === "h2" && theme.headingNumbered ? wrap("span", s.headingNumber, escape4(numberText(theme.headingNumberText, env.sections)), ' data-theme-ornament="heading" aria-hidden="true"') : tag === "h3" && s.h3Marker ? wrap("span", s.h3Marker, escape4(theme.h3MarkerText || "/"), ' data-theme-ornament="subheading" aria-hidden="true"') : "";
       const anchor = tokens2[i].attrGet("id");
       return `<${tag} style="${escape4(s[tag] + (anchor ? "scroll-margin-top:24px;" : ""))}"${anchor ? ` id="${escape4(anchor)}"` : ""}>${marker2}`;
     };
@@ -13275,8 +13277,21 @@ ${end.comment}` : end.comment;
 `;
     md.renderer.rules.paragraph_open = (tokens2, i) => {
       if (tokens2[i].hidden || tokens2[i].meta?.imageOnly) return "";
-      const quote = tokens2.slice(0, i).reduce((count, t) => count + (t.type === "blockquote_open" ? 1 : t.type === "blockquote_close" ? -1 : 0), 0);
-      return `<p style="${escape4(quote ? s.quoteParagraph : s.paragraph)}">`;
+      let quote = 0, kind = null, headingBefore = false, paragraphBefore = false;
+      for (const t of tokens2.slice(0, i)) {
+        if (t.type === "blockquote_open") {
+          quote++;
+          if (t.meta?.callout) kind = t.meta.callout;
+        }
+        if (t.type === "blockquote_close") {
+          quote--;
+          if (t.meta?.callout) kind = null;
+        }
+        if (t.type === "heading_open") headingBefore = true;
+        if (t.type === "paragraph_open" && !t.hidden) paragraphBefore = true;
+      }
+      const style = quote ? (kind === "END" ? s.endParagraph : kind ? s.calloutParagraph : null) || s.quoteParagraph : !headingBefore && !paragraphBefore && s.lead || s.paragraph;
+      return `<p style="${escape4(style)}">`;
     };
     md.renderer.rules.paragraph_close = (tokens2, i) => tokens2[i].hidden || tokens2[i].meta?.imageOnly ? "\n" : "</p>\n";
     md.renderer.rules.blockquote_open = (tokens2, i) => {
@@ -13285,7 +13300,8 @@ ${end.comment}` : end.comment;
       if (!kind) return `<blockquote style="${escape4(s.quote)}">` + (s.quoteMark ? wrap("span", s.quoteMark, "\u201C", ' data-theme-ornament="quote" aria-hidden="true"') : "");
       const titleTokens = tokens2[i].meta.titleTokens;
       const title2 = titleTokens.length ? wrap("p", s.calloutTitle, md.renderer.renderInline(titleTokens, md.options, env)) : "";
-      return `<section style="${escape4(kind === "END" ? s.end : s.callout)}">${title2}`;
+      const endMark = kind === "END" && s.endMark ? wrap("p", s.endMark, escape4(theme.endMarkText || "END"), ' data-theme-ornament="end" aria-hidden="true"') : "";
+      return `<section style="${escape4(kind === "END" ? s.end : s.callout)}">${endMark}${title2}`;
     };
     md.renderer.rules.blockquote_close = (tokens2, i) => tokens2[i].meta?.scrollQuote ? "</section></section>\n" : tokens2[i].meta?.callout ? "</section>\n" : "</blockquote>\n";
     md.renderer.rules.image = (tokens2, i, options, env2, self) => {
@@ -13310,7 +13326,7 @@ ${end.comment}` : end.comment;
     }
     md.renderer.rules.fence = code2;
     md.renderer.rules.code_block = code2;
-    md.renderer.rules.hr = () => `<hr style="${escape4(s.hr)}" />
+    md.renderer.rules.hr = () => theme.hrText ? wrap("p", s.hr, escape4(theme.hrText), ' data-theme-ornament="divider" aria-hidden="true"') + "\n" : `<hr style="${escape4(s.hr)}" />
 `;
     md.renderer.rules.table_open = () => `<section style="${escape4(s.tableWrap)}"><table style="${escape4(s.table)}">`;
     md.renderer.rules.table_close = () => "</table></section>\n";
@@ -13353,7 +13369,7 @@ ${end.comment}` : end.comment;
   function main() {
     const args = process.argv.slice(2);
     if (args.includes("--help")) {
-      console.log("node render.mjs --input /path/article.md --out-dir /path/output [--theme black-red|blueprint|songti-supplement|motion-journal] [--image-map /path/images.json] [--toc] [--scroll-long-quotes] [--overwrite]\n\u56FA\u5B9A\u4E3B\u9898\uFF1Ablack-red \u9ED1\u7EA2\u520A\u523B\u98CE\uFF08\u9ED8\u8BA4\uFF09\u3001blueprint \u84DD\u56FE\u6863\u6848\u3001songti-supplement \u5B8B\u4F53\u526F\u520A\u3001motion-journal \u52A8\u6001\u5B9E\u9A8C\u520A\uFF1B\u65E7\u53C2\u6570 paper-notes \u6620\u5C04\u5230 blueprint\u3002--toc \u5F00\u542F\u56FA\u5B9A\u9AD8\u5EA6\u6EDA\u52A8\u76EE\u5F55\uFF0C\u53EF\u7528\u72EC\u7ACB <!-- toc --> \u6307\u5B9A\u4F4D\u7F6E\uFF0C\u9ED8\u8BA4\u5728\u9996\u4E2A H2 \u524D\uFF1B\u590D\u5236\u65F6\u4FDD\u7559\u6EDA\u52A8\u6837\u5F0F\u3002\u56FE\u7247\u6620\u5C04\u4E3A JSON \u5BF9\u8C61\uFF1A\u539F\u59CB\u8DEF\u5F84 -> HTTPS \u56FE\u5E8A\u5730\u5740\u3002\u672A\u6620\u5C04\u672C\u5730\u56FE\u7247\u5C06\u5D4C\u5165\u6B63\u6587\u5E76\u5141\u8BB8\u590D\u5236\uFF0C\u516C\u4F17\u53F7\u63A5\u6536\u6548\u679C\u9700\u5B9E\u6D4B\u3002\u6D41\u7A0B\u52A8\u753B\u4F7F\u7528 wechat-flow \u56F4\u680F\uFF08YAML title/steps/returnLabel\uFF0C\u56DB\u8282\u70B9\u56FA\u5B9A\u5E03\u5C40\uFF09\u3002\u89C6\u9891\u4F7F\u7528 wechat-video \u56F4\u680F\uFF08YAML title/source\uFF09\uFF0C\u6216\u72EC\u7ACB\u89C6\u9891\u94FE\u63A5/\u5D4C\u5165\u3002\u8F93\u51FA article.html\u3001preview.html\u3001title.txt\u3001report.json\u3001videos.md\u3001videos.json\uFF1B\u89C6\u9891\u4FDD\u7559\u4E3A\u5F85\u63D2\u5165\u5360\u4F4D\u5361\uFF0C\u4E0D\u4E0A\u4F20\u6216\u5D4C\u5165\u64AD\u653E\u5668\u3002");
+      console.log("node render.mjs --input /path/article.md --out-dir /path/output [--theme black-red|blueprint|songti-supplement|motion-journal|folio|celadon|zine] [--image-map /path/images.json] [--toc] [--scroll-long-quotes] [--overwrite]\n\u56FA\u5B9A\u4E3B\u9898\uFF1Ablack-red \u9ED1\u7EA2\u520A\u523B\u98CE\uFF08\u9ED8\u8BA4\uFF09\u3001blueprint \u84DD\u56FE\u6863\u6848\u3001songti-supplement \u5B8B\u4F53\u526F\u520A\u3001motion-journal \u52A8\u6001\u5B9E\u9A8C\u520A\u3001folio \u520A\u7269\u3001celadon \u9752\u74F7\u3001zine \u649E\u8272\uFF1B\u65E7\u53C2\u6570 paper-notes \u6620\u5C04\u5230 blueprint\u3002--toc \u5F00\u542F\u56FA\u5B9A\u9AD8\u5EA6\u6EDA\u52A8\u76EE\u5F55\uFF0C\u53EF\u7528\u72EC\u7ACB <!-- toc --> \u6307\u5B9A\u4F4D\u7F6E\uFF0C\u9ED8\u8BA4\u5728\u9996\u4E2A H2 \u524D\uFF1B\u590D\u5236\u65F6\u4FDD\u7559\u6EDA\u52A8\u6837\u5F0F\u3002\u56FE\u7247\u6620\u5C04\u4E3A JSON \u5BF9\u8C61\uFF1A\u539F\u59CB\u8DEF\u5F84 -> HTTPS \u56FE\u5E8A\u5730\u5740\u3002\u672A\u6620\u5C04\u672C\u5730\u56FE\u7247\u5C06\u5D4C\u5165\u6B63\u6587\u5E76\u5141\u8BB8\u590D\u5236\uFF0C\u516C\u4F17\u53F7\u63A5\u6536\u6548\u679C\u9700\u5B9E\u6D4B\u3002\u6D41\u7A0B\u52A8\u753B\u4F7F\u7528 wechat-flow \u56F4\u680F\uFF08YAML title/steps/returnLabel\uFF0C\u56DB\u8282\u70B9\u56FA\u5B9A\u5E03\u5C40\uFF09\u3002\u89C6\u9891\u4F7F\u7528 wechat-video \u56F4\u680F\uFF08YAML title/source\uFF09\uFF0C\u6216\u72EC\u7ACB\u89C6\u9891\u94FE\u63A5/\u5D4C\u5165\u3002\u8F93\u51FA article.html\u3001preview.html\u3001title.txt\u3001report.json\u3001videos.md\u3001videos.json\uFF1B\u89C6\u9891\u4FDD\u7559\u4E3A\u5F85\u63D2\u5165\u5360\u4F4D\u5361\uFF0C\u4E0D\u4E0A\u4F20\u6216\u5D4C\u5165\u64AD\u653E\u5668\u3002");
       return;
     }
     const options = {};

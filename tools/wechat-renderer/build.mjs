@@ -72,7 +72,8 @@ globalThis.FumiWeChat = {
 });
 
 for (const file of ['assets/theme.json', 'assets/themes/blueprint.json', 'assets/themes/songti-supplement.json',
-                    'assets/themes/motion-journal.json', 'vendor/THIRD_PARTY_LICENSES.txt']) {
+                    'assets/themes/motion-journal.json', 'assets/themes/folio.json',
+                    'assets/themes/celadon.json', 'assets/themes/zine.json', 'vendor/THIRD_PARTY_LICENSES.txt']) {
   const target = path.join(out, file);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.copyFileSync(path.join(src, file), target);

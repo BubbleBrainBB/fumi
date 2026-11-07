@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { renderArticle, buildPreview } from './render.mjs';
+import { renderArticle, buildPreview, loadTheme } from './render.mjs';
 import { videoChecklist } from './videos.mjs';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
@@ -155,6 +155,22 @@ try {
   const paperMapped = renderArticle('![原始图注](一%20张图.png)', { inputPath, theme: 'blueprint', imageMap: { '一 张图.png': hostedUrl } });
   assert.deepEqual(paperMapped.report.images, mapped.report.images);
   assert.equal(renderArticle('![图](一%20张图.png)', { inputPath, theme: 'blueprint' }).report.imageCopyEligible, true);
+  // Folio, Celadon and Zine: the same words, with their own lead, numbers, dividers and endings.
+  const shaped = '# 标题\n\n导语一段。\n\n第二段。\n\n## 第一节\n\n正文。\n\n---\n\n> [!TIP] 提示\n> 提示正文。\n\n## 第二节\n\n> [!END]\n> 结尾的话。\n';
+  for (const [theme, number, divider, end] of [['folio', '— II —', '· · ·', '（完）'], ['celadon', '>2<', '◇ ◇ ◇', 'END'], ['zine', '>02<', '★ ★ ★', 'THE END']]) {
+    const t = loadTheme(theme);
+    const r = renderArticle(shaped, { theme });
+    assert.equal(r.report.theme, theme);
+    assert(r.html.includes(number), `${theme} numbers sections its own way`);
+    assert(r.html.includes(`>${divider}</p>`) && !r.html.includes('<hr'), `${theme} draws its divider with characters`);
+    assert(r.html.includes(`data-theme-ornament="end" aria-hidden="true">${end}</p>`), `${theme} marks the ending`);
+    assert(r.html.includes(`<p style="${t.styles.lead}">导语一段。</p>`), `${theme} sets the opening paragraph as its lead`);
+    assert(r.html.includes(`<p style="${t.styles.paragraph}">第二段。</p>`), 'Only the first paragraph is the lead');
+    assert(r.html.includes(`<p style="${t.styles.calloutParagraph}">提示正文。</p>`) && r.html.includes(`<p style="${t.styles.endParagraph}">结尾的话。</p>`));
+    assert(!r.html.includes(' class='));
+    for (const key of Object.keys(loadTheme('blueprint').styles)) assert(t.styles[key], `${theme} defines ${key}`);
+    assert(!buildPreview(r).includes('<!--THEME_NAME-->'));
+  }
   assert.throws(() => renderArticle(source, { theme: '../theme' }), /未知主题/);
   assert.throws(() => renderArticle(source, { theme: 'toString' }), /未知主题/);
   assert.throws(() => renderArticle('正文', { imageMap: { a: 'javascript:alert(1)' } }), /HTTPS/);
