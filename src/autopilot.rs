@@ -220,6 +220,46 @@ async fn run(p: &mut Pilot, root: &WeakEntity<RootView>, scenario: &str, lib: &s
             }
             sleep(cx, 500).await;
         }
+        "select" => {
+            // A drag across two paragraphs with the pointer's own events, one a
+            // step so frames run between them, then what the window shows.
+            open(p, root, lib, doc, cx).await;
+            let _ = cx.update(|window, cx| {
+                cx.activate(true);
+                window.activate_window();
+                fumi_editor::driver::aim_at(window);
+            });
+            sleep(cx, 500).await;
+            let Some(e) = editor(root, cx) else { return log("FAIL no editor".into()) };
+            let spots = e.read_with(cx, |e, _| {
+                let painted = e.painted.borrow();
+                let long: Vec<_> = painted
+                    .iter()
+                    .filter(|i| e.doc.line_text(i.first_line).chars().count() > 20)
+                    .map(|i| i.bounds)
+                    .collect();
+                (long.len() >= 2).then(|| (long[0], long[1]))
+            });
+            let Some((a, b)) = spots else { return log("FAIL no two long lines on screen".into()) };
+            let f = |p: Pixels| f32::from(p) as f64;
+            let (x0, y0) = (f(a.center().x) - 120., f(a.top()) + 12.);
+            let (x1, y1) = (f(b.center().x) + 120., f(b.top()) + 12.);
+            let dir = std::env::var("FUMI_SHOTS").unwrap_or_default();
+            fumi_editor::driver::post_mouse(1, x0, y0);
+            sleep(cx, 150).await;
+            fumi_editor::driver::post_mouse(6, (x0 + x1) / 2., (y0 + y1) / 2.);
+            sleep(cx, 150).await;
+            fumi_editor::driver::post_mouse(6, x1, y1);
+            sleep(cx, 400).await;
+            let (anchor, head) = e.read_with(cx, |e, _| (e.anchor, e.head));
+            log(format!("RESULT select held anchor={anchor} head={head} from=({x0:.0},{y0:.0}) to=({x1:.0},{y1:.0})"));
+            log(format!("RESULT selectshot {}", fumi_editor::driver::self_shot(&format!("{dir}/app-held.png"))));
+            fumi_editor::driver::post_mouse(2, x1, y1);
+            sleep(cx, 400).await;
+            let (anchor, head) = e.read_with(cx, |e, _| (e.anchor, e.head));
+            log(format!("RESULT select released anchor={anchor} head={head}"));
+            log(format!("RESULT selectshot {}", fumi_editor::driver::self_shot(&format!("{dir}/app-released.png"))));
+        }
         "open" => {
             for d in ["bench10k", "bench50k", "bench200k", "bench1m", "bench10k", "bench200k"] {
                 open(p, root, lib, d, cx).await;

@@ -73,7 +73,22 @@ fn ns(s: &str) -> id {
     unsafe { NSString::alloc(nil).init_str(s) }
 }
 
+thread_local! {
+    /// The window the driver's events and shots go to, when the app has more
+    /// than one and the first visible one isn't it.
+    static TARGET: std::cell::Cell<id> = const { std::cell::Cell::new(nil) };
+}
+
+/// Aims the driver at this GPUI window instead of the first visible one.
+pub fn aim_at(window: &Window) {
+    TARGET.set(fumi_ui::native::ns_window_of(window));
+}
+
 fn ns_window() -> id {
+    let target = TARGET.get();
+    if target != nil {
+        return target;
+    }
     unsafe {
         let app: id = msg_send![class!(NSApplication), sharedApplication];
         let windows: id = msg_send![app, windows];
@@ -335,7 +350,7 @@ unsafe extern "C" {
 type WindowImage = unsafe extern "C" fn(cocoa::foundation::NSRect, u32, u32, u32) -> *mut std::ffi::c_void;
 
 /// Saves this process's own window as a PNG, so a script can look at its result.
-fn self_shot(path: &str) -> bool {
+pub fn self_shot(path: &str) -> bool {
     unsafe {
         let number: isize = msg_send![ns_window(), windowNumber];
         let null = cocoa::foundation::NSRect::new(
@@ -365,6 +380,22 @@ fn self_shot(path: &str) -> bool {
     }
 }
 
+/// One left-button event of the given AppKit type at a window point.
+pub fn post_mouse(kind: u64, x: f64, y: f64) {
+    unsafe {
+        let app: id = msg_send![class!(NSApplication), sharedApplication];
+        let window = ns_window();
+        let number: isize = msg_send![window, windowNumber];
+        let content: id = msg_send![window, contentView];
+        let frame: cocoa::foundation::NSRect = msg_send![content, frame];
+        let at = NSPoint::new(x, frame.size.height - y);
+        let ev: id = msg_send![class!(NSEvent),
+            mouseEventWithType: kind location: at modifierFlags: 0u64 timestamp: 0f64
+            windowNumber: number context: nil eventNumber: 0isize clickCount: 1isize pressure: 1f32];
+        let _: () = msg_send![app, postEvent: ev atStart: false];
+    }
+}
+
 fn post_mouse_move(x: f64, y: f64) {
     unsafe {
         let app: id = msg_send![class!(NSApplication), sharedApplication];
@@ -380,7 +411,7 @@ fn post_mouse_move(x: f64, y: f64) {
 /// `FUMI_DRIVE=script FUMI_SCRIPT=file`: one step a line, for checking things on
 /// screen in a fixture. `click x y`, `move x y`, `drag x0 y0 x1 y1`, `wheel dy`
 /// (over the point 550,400), `drop path`, `paste name` (a named pasteboard), `lines a b`, `key left|right|up|down|enter|backspace`, `type text`, `wait ms`, `shot
-/// file.png`, `state`.
+/// file.png`, `state`, `press x y` / `dragto x y` / `release x y`, `selectall`, `highlight` (⇧⌘H).
 async fn run_script(window: WindowHandle<Editor>, cx: &mut AsyncApp) {
     let path = std::env::var("FUMI_SCRIPT").unwrap_or_default();
     let script = std::fs::read_to_string(&path).unwrap_or_default();
@@ -392,6 +423,13 @@ async fn run_script(window: WindowHandle<Editor>, cx: &mut AsyncApp) {
             "move" => post_mouse_move(n[0], n[1]),
             "drag" => fumi_ui::native::post_mouse_drag(n[0], n[1], n[2], n[3]),
             "wheel" => post_scroll(n[0] as i32),
+            // A drag one event a step, so frames run between them as they do
+            // under a real pointer: `press x y`, `dragto x y`, `release x y`.
+            "press" => post_mouse(1, n[0], n[1]),
+            "dragto" => post_mouse(6, n[0], n[1]),
+            "release" => post_mouse(2, n[0], n[1]),
+            "highlight" => post(&Key { chars: "h".into(), plain: "H".into(), code: 4, flags: FLAG_CMD | (1 << 17) }),
+            "selectall" => post(&Key { chars: "a".into(), plain: "a".into(), code: 0, flags: FLAG_CMD }),
             "wait" => sleep(cx, n[0] as u64).await,
             "shot" => println!("SHOT {rest} {}", self_shot(rest)),
             "key" => post(&match rest {
