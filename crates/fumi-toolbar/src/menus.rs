@@ -101,6 +101,7 @@ pub fn build(state: &MenuState) -> Vec<Menu> {
     let format = Menu::new("Format").items([
         item("Bold", MenuBold),
         item("Italic", MenuItalic),
+        item("Highlight", MenuHighlight),
         item("Insert Link", MenuInsertLink),
         item("Toggle Todo", MenuToggleTodo),
     ]);
@@ -199,7 +200,7 @@ mod tests {
         let bar = build(&MenuState::default());
         assert_eq!(
             lines(menu(&bar, "Format")),
-            ["Bold=fumi::MenuBold", "Italic=fumi::MenuItalic", "Insert Link=fumi::MenuInsertLink", "Toggle Todo=fumi::MenuToggleTodo"]
+            ["Bold=fumi::MenuBold", "Italic=fumi::MenuItalic", "Highlight=fumi::MenuHighlight", "Insert Link=fumi::MenuInsertLink", "Toggle Todo=fumi::MenuToggleTodo"]
         );
     }
 }

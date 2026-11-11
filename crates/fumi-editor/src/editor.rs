@@ -37,7 +37,7 @@ actions!(
         Backspace, Delete, Enter, Left, Right, Up, Down, SelectLeft, SelectRight, SelectUp,
         SelectDown, WordLeft, WordRight, SelectWordLeft, SelectWordRight, LineStart, LineEnd,
         SelectLineStart, SelectLineEnd, DocStart, DocEnd, SelectDocStart, SelectDocEnd, PageUp,
-        PageDown, SelectAll, Copy, Cut, Paste, Undo, Redo, Save, CharacterPalette, Quit, Bold, Italic, InsertLink, ToggleTaskLine,
+        PageDown, SelectAll, Copy, Cut, Paste, Undo, Redo, Save, CharacterPalette, Quit, Bold, Italic, Highlight, InsertLink, ToggleTaskLine,
         ParagraphStart, ParagraphEnd, ScrollToStart, ScrollToEnd, DeleteWordLeft, DeleteWordRight, DeleteToRowStart,
         DeleteToParagraphEnd,
     ]
@@ -84,6 +84,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-s", Save, c),
         KeyBinding::new("cmd-b", Bold, c),
         KeyBinding::new("cmd-i", Italic, c),
+        KeyBinding::new("cmd-shift-h", Highlight, c),
         KeyBinding::new("cmd-k", InsertLink, c),
         KeyBinding::new("cmd-l", ToggleTaskLine, c),
         KeyBinding::new("ctrl-cmd-space", CharacterPalette, c),
@@ -856,7 +857,7 @@ impl Editor {
         .detach();
     }
 
-    /// ⌘B, ⌘I, ⌘K: always adds. With a selection the result, markers included,
+    /// ⌘B, ⌘I, ⇧⌘H, ⌘K: always adds. With a selection the result, markers included,
     /// stays selected; with none the caret sits inside the markers.
     pub fn wrap_selection(&mut self, open: &str, close: &str, cx: &mut Context<Self>) {
         let sel = self.selection();
@@ -1311,6 +1312,7 @@ impl Editor {
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(|this, _: &Bold, _, cx| this.wrap_selection("**", "**", cx)))
             .on_action(cx.listener(|this, _: &Italic, _, cx| this.wrap_selection("*", "*", cx)))
+            .on_action(cx.listener(|this, _: &Highlight, _, cx| this.wrap_selection("==", "==", cx)))
             .on_action(cx.listener(|this, _: &InsertLink, _, cx| this.wrap_selection("[", "](url)", cx)))
             .on_action(cx.listener(|this, _: &ToggleTaskLine, _, cx| this.toggle_task_on_caret_line(cx)))
             .on_action(cx.listener(|_, _: &CharacterPalette, window, _| window.show_character_palette()))

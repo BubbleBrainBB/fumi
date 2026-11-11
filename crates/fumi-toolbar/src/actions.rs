@@ -24,7 +24,7 @@ actions!(
         GoToLibrary9, NextTab, PreviousTab, TogglePinTab, SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5,
         SelectTab6, SelectTab7, SelectTab8, SelectTab9, About, HideApp, HideOthers, ShowAll, Quit, Minimize, Zoom,
         BringAllToFront, ShowHelp, MenuUndo, MenuRedo, MenuCut, MenuCopy, MenuPaste, MenuSelectAll, MenuBold,
-        MenuItalic, MenuInsertLink, MenuToggleTodo,
+        MenuItalic, MenuHighlight, MenuInsertLink, MenuToggleTodo,
     ]
 );
 
@@ -85,6 +85,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         ("cmd-a", MenuSelectAll),
         ("cmd-b", MenuBold),
         ("cmd-i", MenuItalic),
+        ("cmd-shift-h", MenuHighlight),
         ("cmd-k", MenuInsertLink),
         ("cmd-l", MenuToggleTodo),
     ]
@@ -359,6 +360,7 @@ pub fn register_actions<E: InteractiveElement>(mut el: E, toolbar: &Entity<Toolb
     forward_to!(MenuSelectAll, "editor::SelectAll", "text_field::SelectAll");
     forward_to!(MenuBold, "editor::Bold");
     forward_to!(MenuItalic, "editor::Italic");
+    forward_to!(MenuHighlight, "editor::Highlight");
     forward_to!(MenuInsertLink, "editor::InsertLink");
     forward_to!(MenuToggleTodo, "editor::ToggleTaskLine");
     el
@@ -428,6 +430,7 @@ mod tests {
             ("alt-cmd-c", "fumi::CopyForPublish"),
             ("cmd-9", "fumi::SelectTab9"),
             ("cmd-b", "fumi::MenuBold"),
+            ("cmd-shift-h", "fumi::MenuHighlight"),
             ("cmd-l", "fumi::MenuToggleTodo"),
         ] {
             assert_eq!(action_of(key).as_deref(), Some(action), "{key}");

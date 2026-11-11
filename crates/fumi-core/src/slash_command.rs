@@ -97,7 +97,7 @@ pub static ALL: [SlashCommand; 20] = [
     command("bold", "Bold", Group::Format, "⌘B", &["b", "strong", "粗体", "ct"], Action::Inline { prefix: "**", suffix: "**" }),
     command("italic", "Italic", Group::Format, "⌘I", &["i", "em", "斜体", "xt"], Action::Inline { prefix: "*", suffix: "*" }),
     command("strike", "Strikethrough", Group::Format, "~~", &["del", "strike", "删除线", "scx"], Action::Inline { prefix: "~~", suffix: "~~" }),
-    command("highlight", "Highlight", Group::Format, "==", &["mark", "高亮", "gl"], Action::Inline { prefix: "==", suffix: "==" }),
+    command("highlight", "Highlight", Group::Format, "⇧⌘H", &["mark", "高亮", "gl"], Action::Inline { prefix: "==", suffix: "==" }),
     command("inlineCode", "Inline Code", Group::Format, "`", &["code", "行内代码", "hndm"], Action::Inline { prefix: "`", suffix: "`" }),
 ];
 

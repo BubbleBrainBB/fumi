@@ -100,7 +100,7 @@ pub const SHORTCUTS: [(&str, &[(&str, &str)]); 4] = [
             ("Pin / Unpin Tab", "⌥⌘P"),
         ],
     ),
-    ("Format", &[("Bold", "⌘B"), ("Italic", "⌘I"), ("Insert Link", "⌘K"), ("Toggle To-do", "⌘L")]),
+    ("Format", &[("Bold", "⌘B"), ("Italic", "⌘I"), ("Highlight", "⇧⌘H"), ("Insert Link", "⌘K"), ("Toggle To-do", "⌘L")]),
     ("Publish", &[("Show Preview", "⌃⌘P"), ("Copy for WeChat / Add Cards to Photos", "⌥⌘C")]),
 ];
 
@@ -1444,8 +1444,8 @@ mod tests {
 
     #[core::prelude::v1::test]
     fn unfolded_shortcuts_add_up() {
-        // Four labels of 25 and twenty rows of 28.
-        assert_eq!(shortcuts_height(), 4. * 25. + 20. * 28.);
+        // Four labels of 25 and twenty-one rows of 28.
+        assert_eq!(shortcuts_height(), 4. * 25. + 21. * 28.);
     }
 
     #[core::prelude::v1::test]
