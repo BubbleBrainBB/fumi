@@ -66,7 +66,13 @@
     "hr": "margin:40px 0;text-align:center;color:#FF4FA0;font-size:14px;line-height:1;letter-spacing:12px;",
     "end": "margin:52px 0 12px;padding:22px 20px;background:#151515;text-align:center;",
     "endMark": "margin:0 0 10px;font-family:'Arial Black','Helvetica Neue',Arial,sans-serif;font-size:22px;line-height:1;font-weight:900;font-style:italic;color:#FF4FA0;letter-spacing:1px;",
-    "endParagraph": "margin:4px 0;color:#FFFFFF;font-size:14px;line-height:1.8;"
+    "endParagraph": "margin:4px 0;color:#FFFFFF;font-size:14px;line-height:1.8;",
+    "promptWrap": "margin:28px 6px 32px 0;border:2px solid #151515;background:#FFFDF2;box-shadow:5px 5px 0 #FFE14D;",
+    "promptHeader": "display:flex;align-items:center;justify-content:space-between;margin:0;padding:0 14px 0 0;border-bottom:2px solid #151515;background:#FFFFFF;line-height:1.2;",
+    "promptLabel": "display:inline-block;padding:8px 12px;background:#151515;color:#FFE14D;font-family:'SF Mono',Menlo,Consolas,'Courier New',monospace;font-size:11px;line-height:1.2;font-weight:700;letter-spacing:2px;",
+    "promptHint": "color:#5C5C5C;font-size:11px;line-height:1.2;font-weight:700;letter-spacing:0;",
+    "promptBody": "height:200px;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;scrollbar-gutter:stable;padding:6px 16px 10px;",
+    "promptParagraph": "margin:8px 0;color:#151515;font-size:13px;line-height:1.75;font-weight:500;letter-spacing:0;text-align:left;"
   },
   "name": "撞色",
   "codePresentation": "index-card",

@@ -66,7 +66,13 @@
     "hr": "margin:44px 0;text-align:center;color:#A86B1F;font-family:Georgia,'Times New Roman',serif;font-size:20px;line-height:1;letter-spacing:12px;",
     "end": "margin:60px 0 12px;text-align:center;",
     "endMark": "margin:0 0 14px;font-family:'Songti SC','STSong','Noto Serif CJK SC','Source Han Serif SC',serif;font-size:15px;line-height:1.6;color:#1C1A17;letter-spacing:4px;",
-    "endParagraph": "margin:6px 0;font-size:13px;line-height:1.9;color:#8A8274;text-align:center;"
+    "endParagraph": "margin:6px 0;font-size:13px;line-height:1.9;color:#8A8274;text-align:center;",
+    "promptWrap": "margin:30px 0;border-top:2px solid #A86B1F;overflow:hidden;background:#F7F2E8;",
+    "promptHeader": "display:flex;align-items:center;justify-content:space-between;margin:0;padding:12px 18px 10px;border-bottom:1px solid #DDD5C6;line-height:1.5;",
+    "promptLabel": "color:#A86B1F;font-size:12px;line-height:1.5;font-weight:700;letter-spacing:3px;",
+    "promptHint": "color:#8A8274;font-size:11px;line-height:1.5;letter-spacing:0.5px;",
+    "promptBody": "height:200px;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;scrollbar-gutter:stable;padding:6px 18px 10px;",
+    "promptParagraph": "margin:8px 0;color:#4A443B;font-size:13px;line-height:1.9;letter-spacing:0.3px;text-align:left;"
   },
   "name": "刊物",
   "codePresentation": "plain",

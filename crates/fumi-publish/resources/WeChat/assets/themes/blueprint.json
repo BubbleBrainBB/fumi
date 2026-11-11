@@ -58,7 +58,13 @@
     "tocText": "min-width:0;overflow-wrap:anywhere;",
     "scrollQuote": "margin:26px 0;border:1px solid #dce3f0;border-radius:8px;overflow:hidden;background:#f6f8fc;",
     "scrollQuoteLabel": "margin:0;padding:10px 16px;border-bottom:1px solid #dce3f0;color:#737b83;font-size:12px;line-height:1.6;",
-    "scrollQuoteBody": "height:240px;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;scrollbar-gutter:stable;padding:4px 16px;"
+    "scrollQuoteBody": "height:240px;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;scrollbar-gutter:stable;padding:4px 16px;",
+    "promptWrap": "margin:26px 0;border:1px solid #dce3f0;border-radius:8px;overflow:hidden;background:#f6f8fc;",
+    "promptHeader": "display:flex;align-items:center;justify-content:space-between;margin:0;padding:10px 16px;border-bottom:1px solid #dce3f0;line-height:1.5;",
+    "promptLabel": "color:#2455d6;font-size:12px;line-height:1.5;font-weight:700;letter-spacing:1px;",
+    "promptHint": "color:#737b83;font-size:11px;line-height:1.5;letter-spacing:0;",
+    "promptBody": "height:200px;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;scrollbar-gutter:stable;padding:6px 16px 8px;",
+    "promptParagraph": "margin:8px 0;color:#465166;font-size:13px;line-height:1.8;letter-spacing:0;text-align:left;"
   },
   "name": "蓝图档案",
   "codePresentation": "macos",

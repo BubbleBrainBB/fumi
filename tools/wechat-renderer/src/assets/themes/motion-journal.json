@@ -59,7 +59,13 @@
     "tableRow": "border:0;background:transparent;",
     "headingNumber": "display:inline-block;margin:0 18px 0 0;color:#8a9679;font-family:Arial,sans-serif;font-size:64px;line-height:1;font-weight:400;letter-spacing:-4px;font-style:italic;vertical-align:baseline;",
     "quoteMark": "display:block;height:26px;margin:0 0 6px;color:#99a88a;font-family:Georgia,'Times New Roman',serif;font-size:44px;line-height:1;font-weight:400;",
-    "h3Marker": "display:inline-block;margin-right:10px;color:#8a9679;font-family:Arial,sans-serif;font-size:17px;line-height:1;font-weight:400;"
+    "h3Marker": "display:inline-block;margin-right:10px;color:#8a9679;font-family:Arial,sans-serif;font-size:17px;line-height:1;font-weight:400;",
+    "promptWrap": "margin:28px 0;border:1px solid #c5cfb6;overflow:hidden;background:#f0f3e9;",
+    "promptHeader": "display:flex;align-items:center;justify-content:space-between;margin:0;padding:9px 16px;border-bottom:1px solid #c5cfb6;background:#dfe6d2;line-height:1.4;",
+    "promptLabel": "color:#4a5a38;font-size:11px;line-height:1.4;font-weight:600;letter-spacing:1px;",
+    "promptHint": "color:#66705e;font-size:11px;line-height:1.4;letter-spacing:0;",
+    "promptBody": "height:200px;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;scrollbar-gutter:stable;padding:6px 16px 10px;",
+    "promptParagraph": "margin:8px 0;color:#46513f;font-size:13px;line-height:1.85;letter-spacing:0;text-align:left;"
   },
   "name": "动态实验刊",
   "codePresentation": "index-card",

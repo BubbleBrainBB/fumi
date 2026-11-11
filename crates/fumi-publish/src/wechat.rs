@@ -426,6 +426,18 @@ mod tests {
     }
 
     #[test]
+    fn a_prompt_fence_is_a_scrolling_card_in_every_theme() {
+        let note = "Before.\n\n```prompt\nA long **prompt**\n- as typed\n\nSecond part.\n```\n\n![](https://example.com/a.png)\nAfter.";
+        for theme in Theme::ALL {
+            let html = blocking(note, "/tmp/n.md", theme).unwrap().html;
+            assert!(html.contains("data-prompt-block=\"true\""), "{theme:?}");
+            assert!(html.contains("height:200px;overflow-y:auto;"), "{theme:?} scrolls its prompt");
+            assert!(html.contains(">A long **prompt**<br />- as typed</p>"), "{theme:?} keeps the prompt as typed: {html}");
+            assert!(!html.contains("<pre"), "{theme:?}: not a code block");
+        }
+    }
+
+    #[test]
     fn folio_celadon_and_zine_draw_their_own_marks() {
         let note = "# T\n\nLead.\n\n## One\n\n## Two\n\n---\n\n> [!END]\n> Bye.";
         for (theme, number, divider, end) in [

@@ -171,6 +171,18 @@ try {
     for (const key of Object.keys(loadTheme('blueprint').styles)) assert(t.styles[key], `${theme} defines ${key}`);
     assert(!buildPreview(r).includes('<!--THEME_NAME-->'));
   }
+  // A prompt fence is a scrolling card in every theme: literal text, blank lines part paragraphs.
+  const promptSource = '前文。\n\n```prompt\n第一段 **不加粗** <b>\n- 仍是原文\n\n第二段。\n```\n\n```prompt 海报提示词\n另一段。\n```\n\n```text\nprompt\n```';
+  for (const theme of ['black-red', 'blueprint', 'songti-supplement', 'motion-journal', 'folio', 'celadon', 'zine']) {
+    const t = loadTheme(theme);
+    const r = renderArticle(promptSource, { theme });
+    assert.equal(r.report.prompts, 2, `${theme} counts prompt cards`);
+    assert.equal((r.html.match(/data-prompt-block="true"/g) || []).length, 2);
+    assert(r.html.includes(`<section style="${t.styles.promptBody}" tabindex="0"`) && /height:200px;overflow-y:auto;/.test(t.styles.promptBody), `${theme} scrolls its prompt`);
+    assert(r.html.includes(`<p style="${t.styles.promptParagraph}">第一段 **不加粗** &lt;b&gt;<br />- 仍是原文</p><p style="${t.styles.promptParagraph}">第二段。</p>`), `${theme} keeps the prompt as typed`);
+    assert(r.html.includes('>提示词 · PROMPT</span>') && r.html.includes('>海报提示词</span>'));
+    assert.equal((r.html.match(/<pre /g) || []).length, 1, 'Other fences stay code');
+  }
   assert.throws(() => renderArticle(source, { theme: '../theme' }), /未知主题/);
   assert.throws(() => renderArticle(source, { theme: 'toString' }), /未知主题/);
   assert.throws(() => renderArticle('正文', { imageMap: { a: 'javascript:alert(1)' } }), /HTTPS/);

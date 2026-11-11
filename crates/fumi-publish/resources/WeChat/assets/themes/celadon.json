@@ -65,7 +65,13 @@
     "hr": "margin:40px 0;text-align:center;color:#9CC5BC;font-size:12px;line-height:1;letter-spacing:10px;",
     "end": "margin:52px 0 12px;padding:22px 20px;border-radius:16px;background:#EEF5F3;text-align:center;",
     "endMark": "display:inline-block;margin:0 0 10px;padding:3px 12px;border-radius:12px;background:#3E7C72;color:#FFFFFF;font-family:'Avenir Next','Helvetica Neue',Arial,sans-serif;font-size:11px;line-height:1.4;font-weight:600;letter-spacing:3px;",
-    "endParagraph": "margin:4px 0;color:#4D5C58;font-size:14px;line-height:1.9;"
+    "endParagraph": "margin:4px 0;color:#4D5C58;font-size:14px;line-height:1.9;",
+    "promptWrap": "margin:28px 0;border-radius:16px;overflow:hidden;background:#EEF5F3;",
+    "promptHeader": "display:flex;align-items:center;justify-content:space-between;margin:0;padding:14px 16px 6px;line-height:1.2;",
+    "promptLabel": "display:inline-block;padding:4px 10px;border-radius:10px;background:#DDEDE8;color:#3E7C72;font-size:11px;line-height:1.2;font-weight:600;letter-spacing:1px;",
+    "promptHint": "color:#7A8A85;font-size:11px;line-height:1.2;letter-spacing:0.5px;",
+    "promptBody": "height:200px;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;scrollbar-gutter:stable;padding:2px 16px 10px;",
+    "promptParagraph": "margin:8px 0;color:#4D5C58;font-size:13px;line-height:1.9;letter-spacing:0.4px;text-align:left;"
   },
   "name": "青瓷",
   "codePresentation": "index-card",

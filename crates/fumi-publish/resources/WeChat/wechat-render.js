@@ -13324,7 +13324,19 @@ ${end.comment}` : end.comment;
       const header = theme.codePresentation === "index-card" ? wrap("section", s.codeHeader, wrap("span", s.codeLang, escape4(language.toUpperCase() || "CODE"))) : theme.codePresentation === "plain" ? label ? wrap("section", s.codeHeader, label) : "" : wrap("section", s.codeHeader, dots + label);
       return wrap("section", s.codeWrap, header + wrap("pre", s.pre, wrap("code", s.code, escape4(tokens2[i].content)))) + "\n";
     }
-    md.renderer.rules.fence = code2;
+    let promptCount = 0;
+    function prompt(token) {
+      promptCount++;
+      const label = token.info.trim().split(/\s+/).slice(1).join(" ") || "\u63D0\u793A\u8BCD \xB7 PROMPT";
+      const paragraphs = token.content.trim().split(/\n(?:[ \t]*\n)+/).map((text3) => wrap("p", s.promptParagraph, text3.split("\n").map(escape4).join("<br />"))).join("");
+      return wrap(
+        "section",
+        s.promptWrap,
+        wrap("section", s.promptHeader, wrap("span", s.promptLabel, escape4(label)) + wrap("span", s.promptHint, "\u4E0A\u4E0B\u6ED1\u52A8\u67E5\u770B\u5168\u6587")) + wrap("section", s.promptBody, paragraphs, ' tabindex="0" role="region" aria-label="\u63D0\u793A\u8BCD\u5168\u6587\uFF0C\u53EF\u4E0A\u4E0B\u6EDA\u52A8"'),
+        ' data-prompt-block="true"'
+      ) + "\n";
+    }
+    md.renderer.rules.fence = (tokens2, i) => tokens2[i].info.trim().split(/\s+/)[0] === "prompt" ? prompt(tokens2[i]) : code2(tokens2, i);
     md.renderer.rules.code_block = code2;
     md.renderer.rules.hr = () => theme.hrText ? wrap("p", s.hr, escape4(theme.hrText), ' data-theme-ornament="divider" aria-hidden="true"') + "\n" : `<hr style="${escape4(s.hr)}" />
 `;
@@ -13345,6 +13357,7 @@ ${end.comment}` : end.comment;
       videos,
       animations,
       scrollQuotes: { enabled: Boolean(scrollLongQuotes), count: scrollQuoteCount },
+      prompts: promptCount,
       toc: { enabled: Boolean(toc), entries: tocEntries },
       warnings: [...warnings],
       requiresReview: warnings.size > 0,
@@ -13369,7 +13382,7 @@ ${end.comment}` : end.comment;
   function main() {
     const args = process.argv.slice(2);
     if (args.includes("--help")) {
-      console.log("node render.mjs --input /path/article.md --out-dir /path/output [--theme black-red|blueprint|songti-supplement|motion-journal|folio|celadon|zine] [--image-map /path/images.json] [--toc] [--scroll-long-quotes] [--overwrite]\n\u56FA\u5B9A\u4E3B\u9898\uFF1Ablack-red \u9ED1\u7EA2\u520A\u523B\u98CE\uFF08\u9ED8\u8BA4\uFF09\u3001blueprint \u84DD\u56FE\u6863\u6848\u3001songti-supplement \u5B8B\u4F53\u526F\u520A\u3001motion-journal \u52A8\u6001\u5B9E\u9A8C\u520A\u3001folio \u520A\u7269\u3001celadon \u9752\u74F7\u3001zine \u649E\u8272\uFF1B\u65E7\u53C2\u6570 paper-notes \u6620\u5C04\u5230 blueprint\u3002--toc \u5F00\u542F\u56FA\u5B9A\u9AD8\u5EA6\u6EDA\u52A8\u76EE\u5F55\uFF0C\u53EF\u7528\u72EC\u7ACB <!-- toc --> \u6307\u5B9A\u4F4D\u7F6E\uFF0C\u9ED8\u8BA4\u5728\u9996\u4E2A H2 \u524D\uFF1B\u590D\u5236\u65F6\u4FDD\u7559\u6EDA\u52A8\u6837\u5F0F\u3002\u56FE\u7247\u6620\u5C04\u4E3A JSON \u5BF9\u8C61\uFF1A\u539F\u59CB\u8DEF\u5F84 -> HTTPS \u56FE\u5E8A\u5730\u5740\u3002\u672A\u6620\u5C04\u672C\u5730\u56FE\u7247\u5C06\u5D4C\u5165\u6B63\u6587\u5E76\u5141\u8BB8\u590D\u5236\uFF0C\u516C\u4F17\u53F7\u63A5\u6536\u6548\u679C\u9700\u5B9E\u6D4B\u3002\u6D41\u7A0B\u52A8\u753B\u4F7F\u7528 wechat-flow \u56F4\u680F\uFF08YAML title/steps/returnLabel\uFF0C\u56DB\u8282\u70B9\u56FA\u5B9A\u5E03\u5C40\uFF09\u3002\u89C6\u9891\u4F7F\u7528 wechat-video \u56F4\u680F\uFF08YAML title/source\uFF09\uFF0C\u6216\u72EC\u7ACB\u89C6\u9891\u94FE\u63A5/\u5D4C\u5165\u3002\u8F93\u51FA article.html\u3001preview.html\u3001title.txt\u3001report.json\u3001videos.md\u3001videos.json\uFF1B\u89C6\u9891\u4FDD\u7559\u4E3A\u5F85\u63D2\u5165\u5360\u4F4D\u5361\uFF0C\u4E0D\u4E0A\u4F20\u6216\u5D4C\u5165\u64AD\u653E\u5668\u3002");
+      console.log("node render.mjs --input /path/article.md --out-dir /path/output [--theme black-red|blueprint|songti-supplement|motion-journal|folio|celadon|zine] [--image-map /path/images.json] [--toc] [--scroll-long-quotes] [--overwrite]\n\u56FA\u5B9A\u4E3B\u9898\uFF1Ablack-red \u9ED1\u7EA2\u520A\u523B\u98CE\uFF08\u9ED8\u8BA4\uFF09\u3001blueprint \u84DD\u56FE\u6863\u6848\u3001songti-supplement \u5B8B\u4F53\u526F\u520A\u3001motion-journal \u52A8\u6001\u5B9E\u9A8C\u520A\u3001folio \u520A\u7269\u3001celadon \u9752\u74F7\u3001zine \u649E\u8272\uFF1B\u65E7\u53C2\u6570 paper-notes \u6620\u5C04\u5230 blueprint\u3002--toc \u5F00\u542F\u56FA\u5B9A\u9AD8\u5EA6\u6EDA\u52A8\u76EE\u5F55\uFF0C\u53EF\u7528\u72EC\u7ACB <!-- toc --> \u6307\u5B9A\u4F4D\u7F6E\uFF0C\u9ED8\u8BA4\u5728\u9996\u4E2A H2 \u524D\uFF1B\u590D\u5236\u65F6\u4FDD\u7559\u6EDA\u52A8\u6837\u5F0F\u3002\u56FE\u7247\u6620\u5C04\u4E3A JSON \u5BF9\u8C61\uFF1A\u539F\u59CB\u8DEF\u5F84 -> HTTPS \u56FE\u5E8A\u5730\u5740\u3002\u672A\u6620\u5C04\u672C\u5730\u56FE\u7247\u5C06\u5D4C\u5165\u6B63\u6587\u5E76\u5141\u8BB8\u590D\u5236\uFF0C\u516C\u4F17\u53F7\u63A5\u6536\u6548\u679C\u9700\u5B9E\u6D4B\u3002\u957F\u63D0\u793A\u8BCD\u4F7F\u7528 prompt \u56F4\u680F\uFF1A\u6E32\u67D3\u4E3A\u56FA\u5B9A\u9AD8\u5EA6\u3001\u53EF\u4E0A\u4E0B\u6ED1\u52A8\u7684\u63D0\u793A\u8BCD\u5361\u7247\uFF0Cprompt \u540E\u7684\u6587\u5B57\u66FF\u6362\u5361\u7247\u6807\u9898\u3002\u6D41\u7A0B\u52A8\u753B\u4F7F\u7528 wechat-flow \u56F4\u680F\uFF08YAML title/steps/returnLabel\uFF0C\u56DB\u8282\u70B9\u56FA\u5B9A\u5E03\u5C40\uFF09\u3002\u89C6\u9891\u4F7F\u7528 wechat-video \u56F4\u680F\uFF08YAML title/source\uFF09\uFF0C\u6216\u72EC\u7ACB\u89C6\u9891\u94FE\u63A5/\u5D4C\u5165\u3002\u8F93\u51FA article.html\u3001preview.html\u3001title.txt\u3001report.json\u3001videos.md\u3001videos.json\uFF1B\u89C6\u9891\u4FDD\u7559\u4E3A\u5F85\u63D2\u5165\u5360\u4F4D\u5361\uFF0C\u4E0D\u4E0A\u4F20\u6216\u5D4C\u5165\u64AD\u653E\u5668\u3002");
       return;
     }
     const options = {};

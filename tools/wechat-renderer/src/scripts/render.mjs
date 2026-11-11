@@ -323,7 +323,21 @@ export function renderArticle(raw, { inputPath = path.resolve('article.md'), ima
       : wrap('section', s.codeHeader, dots + label);
     return wrap('section', s.codeWrap, header + wrap('pre', s.pre, wrap('code', s.code, escape(tokens[i].content)))) + '\n';
   }
-  md.renderer.rules.fence = code;
+  // A ```prompt fence is a long prompt kept out of the article's flow: a card of
+  // fixed height whose text scrolls. The text is literal (its ** and - stay as
+  // typed); blank lines part paragraphs. Words after `prompt` replace the label.
+  let promptCount = 0;
+  function prompt(token) {
+    promptCount++;
+    const label = token.info.trim().split(/\s+/).slice(1).join(' ') || '提示词 · PROMPT';
+    const paragraphs = token.content.trim().split(/\n(?:[ \t]*\n)+/)
+      .map(text => wrap('p', s.promptParagraph, text.split('\n').map(escape).join('<br />'))).join('');
+    return wrap('section', s.promptWrap,
+      wrap('section', s.promptHeader, wrap('span', s.promptLabel, escape(label)) + wrap('span', s.promptHint, '上下滑动查看全文')) +
+      wrap('section', s.promptBody, paragraphs, ' tabindex="0" role="region" aria-label="提示词全文，可上下滚动"'),
+      ' data-prompt-block="true"') + '\n';
+  }
+  md.renderer.rules.fence = (tokens, i) => tokens[i].info.trim().split(/\s+/)[0] === 'prompt' ? prompt(tokens[i]) : code(tokens, i);
   md.renderer.rules.code_block = code;
   // A theme's hrText draws the divider as a line of characters (· · ·) in place of a rule.
   md.renderer.rules.hr = () => theme.hrText ? wrap('p', s.hr, escape(theme.hrText), ' data-theme-ornament="divider" aria-hidden="true"') + '\n' : `<hr style="${escape(s.hr)}" />\n`;
@@ -335,7 +349,7 @@ export function renderArticle(raw, { inputPath = path.resolve('article.md'), ima
     template: theme.id, theme: themeName, version: theme.version,
     sourceSha256: hash(raw), templateSha256: hash(JSON.stringify(theme)),
     title, leadingTitleExtracted: titleExtracted, sections: env.sections,
-    images, videos, animations, scrollQuotes: { enabled: Boolean(scrollLongQuotes), count: scrollQuoteCount }, toc: { enabled: Boolean(toc), entries: tocEntries }, warnings: [...warnings], requiresReview: warnings.size > 0,
+    images, videos, animations, scrollQuotes: { enabled: Boolean(scrollLongQuotes), count: scrollQuoteCount }, prompts: promptCount, toc: { enabled: Boolean(toc), entries: tocEntries }, warnings: [...warnings], requiresReview: warnings.size > 0,
     imageCopyEligible: images.every(image => ['remote', 'local', 'embedded'].includes(image.kind)),
     imageLoadCheck: images.length ? 'pending-browser-check' : 'not-needed',
     wechatPasteVerified: false,
@@ -367,7 +381,7 @@ export function buildPreview({ html, title, report }) {
 function main() {
   const args = process.argv.slice(2);
   if (args.includes('--help')) {
-    console.log('node render.mjs --input /path/article.md --out-dir /path/output [--theme black-red|blueprint|songti-supplement|motion-journal|folio|celadon|zine] [--image-map /path/images.json] [--toc] [--scroll-long-quotes] [--overwrite]\n固定主题：black-red 黑红刊刻风（默认）、blueprint 蓝图档案、songti-supplement 宋体副刊、motion-journal 动态实验刊、folio 刊物、celadon 青瓷、zine 撞色；旧参数 paper-notes 映射到 blueprint。--toc 开启固定高度滚动目录，可用独立 <!-- toc --> 指定位置，默认在首个 H2 前；复制时保留滚动样式。图片映射为 JSON 对象：原始路径 -> HTTPS 图床地址。未映射本地图片将嵌入正文并允许复制，公众号接收效果需实测。流程动画使用 wechat-flow 围栏（YAML title/steps/returnLabel，四节点固定布局）。视频使用 wechat-video 围栏（YAML title/source），或独立视频链接/嵌入。输出 article.html、preview.html、title.txt、report.json、videos.md、videos.json；视频保留为待插入占位卡，不上传或嵌入播放器。');
+    console.log('node render.mjs --input /path/article.md --out-dir /path/output [--theme black-red|blueprint|songti-supplement|motion-journal|folio|celadon|zine] [--image-map /path/images.json] [--toc] [--scroll-long-quotes] [--overwrite]\n固定主题：black-red 黑红刊刻风（默认）、blueprint 蓝图档案、songti-supplement 宋体副刊、motion-journal 动态实验刊、folio 刊物、celadon 青瓷、zine 撞色；旧参数 paper-notes 映射到 blueprint。--toc 开启固定高度滚动目录，可用独立 <!-- toc --> 指定位置，默认在首个 H2 前；复制时保留滚动样式。图片映射为 JSON 对象：原始路径 -> HTTPS 图床地址。未映射本地图片将嵌入正文并允许复制，公众号接收效果需实测。长提示词使用 prompt 围栏：渲染为固定高度、可上下滑动的提示词卡片，prompt 后的文字替换卡片标题。流程动画使用 wechat-flow 围栏（YAML title/steps/returnLabel，四节点固定布局）。视频使用 wechat-video 围栏（YAML title/source），或独立视频链接/嵌入。输出 article.html、preview.html、title.txt、report.json、videos.md、videos.json；视频保留为待插入占位卡，不上传或嵌入播放器。');
     return;
   }
   const options = {};
