@@ -1671,6 +1671,10 @@ impl Editor {
                 self.dragged = true;
                 self.hold_reveal = true;
                 self.set_head_from_mouse(head, false);
+                // The drag's own listeners go up on the next paint, which
+                // nothing else asks for: without it the selection never grows.
+                self.drag_move(e.position, cx);
+                cx.notify();
             } else {
                 return;
             }
