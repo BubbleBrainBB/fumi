@@ -382,6 +382,10 @@ impl SidebarView {
         }
         element = if selected {
             element.bg(c.ground_selected).shadow(selected_shadow(&c))
+        } else if matches!(row.kind, RowKind::Folder) {
+            // A folder row sets its own hover below, which also recolors its
+            // text; a second one here panics ("hover style already set").
+            element
         } else {
             element.hover(move |row| row.bg(c.card_hover))
         };
