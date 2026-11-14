@@ -220,6 +220,55 @@ async fn run(p: &mut Pilot, root: &WeakEntity<RootView>, scenario: &str, lib: &s
             }
             sleep(cx, 500).await;
         }
+        "search" => {
+            // A note opened from the search panel with a body hit: the steps
+            // `open_row` takes, then what should come of them — the jump to the
+            // match's line and the flash pointing at it.
+            let hit = root.update(cx, |r, cx| {
+                let w = r.workspace.read(cx);
+                fumi_core::fuzzy_search::hits(w.store.notes(), "安静", 100)
+                    .into_iter()
+                    .find_map(|h| h.content_range.map(|at| (h.note.id.clone(), at)))
+            });
+            let Some((id, at)) = hit.ok().flatten() else { return log("no body hit".into()) };
+            let _ = root.update(cx, |r, cx| {
+                r.workspace.update(cx, |w, cx| {
+                    w.model.open_note(Some(&id), false);
+                    w.navigated(cx);
+                });
+                // What the panel's on_open runs in the app.
+                r.pages.update(cx, |host, cx| host.reveal_match(&id, Some(at.clone()), cx));
+            });
+            sleep(cx, 700).await;
+            let checks = editor(root, cx).map(|e| {
+                e.read_with(cx, |e, _| {
+                    let line = e.doc.line_of(at.start);
+                    let (top, want) = (e.list.logical_scroll_top().item_ix, e.item_of(line));
+                    let on_screen = e.painted.borrow().iter().any(|i| line >= i.first_line && line < i.first_line + i.n_lines);
+                    (e.flashing(), top, want, line, e.doc.line_count(), e.text()[at.clone()].to_string(), on_screen)
+                })
+            });
+            let Some((flash, top, want, line, lines, matched, on_screen)) = checks else { return log("FAIL no editor".into()) };
+            let ok = flash == Some(at.clone()) && matched == "安静" && line > 5 && on_screen;
+            log(format!(
+                "RESULT searchjump {} line {}/{} top {}/{} on_screen {on_screen} matched {:?} flash {:?} {}",
+                id.rsplit('/').next().unwrap_or(&id),
+                line + 1,
+                lines,
+                top,
+                want,
+                matched,
+                flash,
+                if ok { "OK" } else { "FAIL" }
+            ));
+            // The flash, as the user sees it.
+            let shot = fumi_editor::driver::window_shot("shots/search-flash.png");
+            log(format!("RESULT searchshot {shot}"));
+            // The flash is brief: soon after, it's gone.
+            sleep(cx, 2200).await;
+            let cleared = editor(root, cx).is_none_or(|e| e.read_with(cx, |e, _| e.flashing().is_none()));
+            log(format!("RESULT searchflash cleared {cleared}"));
+        }
         "select" => {
             // A drag across two paragraphs with the pointer's own events, one a
             // step so frames run between them, then what the window shows.

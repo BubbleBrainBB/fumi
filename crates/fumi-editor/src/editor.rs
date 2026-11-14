@@ -222,6 +222,8 @@ pub struct Editor {
     pub on_blink: Option<Rc<dyn Fn(&mut App)>>,
     hovered_web: Option<String>,
     edit_epoch: u64,
+    /// A search hit pointed at: its range, flashing until it fades.
+    flash: Option<Flash>,
     scrolled_at: Option<Instant>,
     last_scroll_top: (usize, f32),
     thumb_hover: bool,
@@ -300,6 +302,35 @@ struct PendingLink {
     anchor: Bounds<Pixels>,
 }
 
+/// A search hit pointed at: its range, held and then faded away.
+struct Flash {
+    range: Range<usize>,
+    started: Instant,
+}
+
+/// How long a search hit's flash holds at full strength, and how long it then
+/// takes to fade.
+const FLASH_HOLD: f32 = 0.9;
+const FLASH_FADE: f32 = 0.6;
+/// How strong the flash draws at its fullest, as a share of the accent colour.
+const FLASH_MAX: f32 = 0.32;
+
+impl Flash {
+    /// The flash's strength now: full while it holds, then down to nothing.
+    fn alpha(&self, now: Instant) -> f32 {
+        let elapsed = now.saturating_duration_since(self.started).as_secs_f32();
+        if elapsed < FLASH_HOLD {
+            1.
+        } else {
+            (1. - (elapsed - FLASH_HOLD) / FLASH_FADE).clamp(0., 1.)
+        }
+    }
+
+    fn done(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.started).as_secs_f32() >= FLASH_HOLD + FLASH_FADE
+    }
+}
+
 /// Where a note was left, to come back to.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ViewState {
@@ -369,6 +400,7 @@ impl Editor {
             caret_slot: None,
             on_blink: None,
             hovered_web: None,
+            flash: None,
             edit_epoch: 0,
             scrolled_at: None,
             last_scroll_top: (0, 0.),
@@ -459,6 +491,7 @@ impl Editor {
         self.anchor = 0;
         self.head = 0;
         self.marked = None;
+        self.flash = None;
         self.undo.clear();
         self.redo.clear();
         self.caret_line = 0;
@@ -778,6 +811,8 @@ impl Editor {
         let added = text.bytes().filter(|b| *b == b'\n').count();
         let changed = self.rescan(first, removed, added, sensitive);
         self.media_lines_moved(first, removed, added);
+        // What was flashing points at offsets that just moved.
+        self.flash = None;
 
         let caret = range.start + text.len();
         self.anchor = caret;
@@ -1011,6 +1046,34 @@ impl Editor {
         }
     }
 
+    /// A note opened from search with a match in it: the match's line is
+    /// scrolled to the top, as heading jumps are, and the range flashes to
+    /// point at it. The text must be the note's content as the store reads it,
+    /// which a note page's editor holds.
+    pub fn reveal_match(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+        let end = self.doc.len();
+        let range = range.start.min(end)..range.end.min(end);
+        if range.is_empty() {
+            return;
+        }
+        // A match inside a folded block: unfold it, so its line is there to
+        // flash. The block the caret had open folds, as its own moves do.
+        let line = self.doc.line_of(range.start);
+        let block = self.foldable_block_at(line);
+        if block != self.revealed {
+            self.revealed = block;
+            self.rebuild_items();
+        }
+        self.scroll_to_line(line, cx);
+        self.flash = Some(Flash { range, started: Instant::now() });
+        cx.notify();
+    }
+
+    /// The range being flashed to point at a search hit, if one is showing.
+    pub fn flashing(&self) -> Option<Range<usize>> {
+        self.flash.as_ref().map(|f| f.range.clone())
+    }
+
     fn apply(&mut self, at: usize, old_len: usize, text: &str, sel: (usize, usize)) {
         let first = self.doc.line_of(at);
         let removed = self.doc.line_of(at + old_len) - first;
@@ -1019,6 +1082,7 @@ impl Editor {
         let added = text.bytes().filter(|b| *b == b'\n').count();
         let changed = self.rescan(first, removed, added, sensitive);
         self.media_lines_moved(first, removed, added);
+        self.flash = None;
         self.anchor = sel.0;
         self.head = sel.1;
         self.marked = None;
@@ -1920,6 +1984,17 @@ impl Editor {
                     let b = sel.end.min(start + src_len) - start;
                     (display.src_to_disp(a)..display.src_to_disp(b), sel.end > start + src_len)
                 });
+            let flash = self
+                .flash
+                .as_ref()
+                .filter(|f| f.range.start <= start + src_len && f.range.end >= start)
+                .map(|f| {
+                    let a = f.range.start.max(start) - start;
+                    let b = f.range.end.min(start + src_len) - start;
+                    let color = t().accent.opacity(FLASH_MAX * f.alpha(Instant::now()));
+                    (display.src_to_disp(a)..display.src_to_disp(b), color)
+                })
+                .filter(|(range, _)| !range.is_empty());
             let hovered = self
                 .hovered_link
                 .as_ref()
@@ -1939,6 +2014,7 @@ impl Editor {
                 caret_slot: self.caret_slot.clone(),
                 autoscroll,
                 selection,
+                flash,
                 hovered,
                 painted: self.painted.clone(),
                 shaped: Rc::new(RefCell::new(None)),
@@ -2020,6 +2096,14 @@ impl Render for Editor {
         }
         self.viewport_cache = self.list.viewport_bounds();
         metrics::frame_begin();
+        // A search hit flashing: keep frames coming until it has faded.
+        if let Some(flash) = self.flash.as_ref() {
+            if flash.done(Instant::now()) {
+                self.flash = None;
+            } else {
+                window.request_animation_frame();
+            }
+        }
         if std::mem::take(&mut self.media_dirty) {
             self.settle_media(window);
         }
@@ -2991,6 +3075,22 @@ mod tests {
 
     fn item_ix(items: &[Item], line: u32) -> usize {
         items.iter().position(|i| i.start == line).unwrap()
+    }
+
+    #[core::prelude::v1::test]
+    fn a_flash_holds_then_fades() {
+        let started = Instant::now();
+        let flash = Flash { range: 0..5, started };
+        assert_eq!(flash.alpha(started), 1., "full the moment it starts");
+        let held = started + Duration::from_secs_f32(FLASH_HOLD * 0.5);
+        assert_eq!(flash.alpha(held), 1., "full while it holds");
+        let fading = started + Duration::from_secs_f32(FLASH_HOLD + FLASH_FADE / 2.);
+        let alpha = flash.alpha(fading);
+        assert!((alpha - 0.5).abs() < 1e-3, "halfway through the fade: {alpha}");
+        let gone = started + Duration::from_secs_f32(FLASH_HOLD + FLASH_FADE + 0.1);
+        assert_eq!(flash.alpha(gone), 0., "nothing once past it");
+        assert!(flash.done(gone));
+        assert!(!flash.done(fading));
     }
 
     #[core::prelude::v1::test]

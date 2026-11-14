@@ -15,6 +15,7 @@ use fumi_ui::theme::{PAGE_INNER_RADIUS, t};
 use fumi_editor::element::CaretSlot;
 use gpui::*;
 use std::collections::HashMap;
+use std::ops::Range;
 use std::rc::Rc;
 use std::path::Path;
 use std::time::Duration;
@@ -403,6 +404,27 @@ impl PageHost {
         let w = self.workspace.read(cx);
         let page = self.pages.get(w.model.active_id())?;
         Some(page.editor.read(cx).text())
+    }
+
+    /// A note opened from search with a match in it: once the page is up, its
+    /// editor scrolls to the match's line and flashes the match. The delay is
+    /// the wiki-link heading jump's, giving a newly opened editor a frame to
+    /// lay its lines out.
+    pub fn reveal_match(&mut self, note_id: &str, range: Option<Range<usize>>, cx: &mut Context<Self>) {
+        let Some(range) = range else { return };
+        let note_id = note_id.to_string();
+        cx.spawn(async move |this: WeakEntity<PageHost>, cx| {
+            cx.background_executor().timer(Duration::from_millis(350)).await;
+            let _ = this.update(cx, |host, cx| {
+                let active = host.workspace.read(cx).model.active_id().to_string();
+                if let Some(page) = host.pages.get(&active)
+                    && page.note_id == note_id
+                {
+                    page.editor.update(cx, |e, cx| e.reveal_match(range, cx));
+                }
+            });
+        })
+        .detach();
     }
 }
 

@@ -12,6 +12,8 @@ use fumi_ui::theme::t;
 use fumi_workspace::Workspace;
 use gpui::prelude::*;
 use gpui::*;
+use std::ops::Range;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -41,6 +43,8 @@ pub struct Row {
     pub subtitle: String,
     pub subtitle_ranges: Vec<FuzzyRange>,
     pub snippet: Option<Snippet>,
+    /// The match's byte range in the note's content, to jump to when opened.
+    pub content_range: Option<Range<usize>>,
 }
 
 impl Row {
@@ -54,9 +58,15 @@ impl Row {
             subtitle: hit.subtitle.clone(),
             subtitle_ranges: hit.subtitle_ranges.clone(),
             snippet: hit.snippet.clone(),
+            content_range: hit.content_range.clone(),
         }
     }
 }
+
+/// Told when a result opens: the note's id, and the matched range in its
+/// content when the hit was in the body, which the page that shows it can
+/// scroll to and flash. Runs after the note has been opened.
+pub type OnOpenNote = Rc<dyn Fn(&str, Option<Range<usize>>, &mut Window, &mut App)>;
 
 // The panel's rules, kept free of the UI.
 
@@ -148,6 +158,7 @@ struct ScrollTween {
 pub struct SearchPanel {
     workspace: Entity<Workspace>,
     field: Entity<TextField>,
+    on_open: OnOpenNote,
     shown: Transition,
     prev_focus: Option<FocusHandle>,
     query: String,
@@ -167,7 +178,7 @@ pub struct SearchPanel {
 }
 
 impl SearchPanel {
-    pub fn new(workspace: Entity<Workspace>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(workspace: Entity<Workspace>, on_open: OnOpenNote, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let field = cx.new(|cx| {
             let mut f = TextField::new("Search notes", window, cx);
             f.font_size = px(15.);
@@ -180,7 +191,7 @@ impl SearchPanel {
                 FieldEvent::Changed => this.query_changed(cx),
                 FieldEvent::Submit => {
                     let new_tab = window.modifiers().platform;
-                    this.open_selected(new_tab, cx);
+                    this.open_selected(new_tab, window, cx);
                 }
                 FieldEvent::Cancel => this.dismiss(cx),
                 FieldEvent::MoveUp => this.move_selection(-1, cx),
@@ -192,6 +203,7 @@ impl SearchPanel {
         SearchPanel {
             workspace,
             field,
+            on_open,
             shown: Transition::new(false, FADE_SECS),
             prev_focus: None,
             query: String::new(),
@@ -348,7 +360,7 @@ impl SearchPanel {
         cx.notify();
     }
 
-    fn open_selected(&mut self, new_tab: bool, cx: &mut Context<Self>) {
+    fn open_selected(&mut self, new_tab: bool, window: &mut Window, cx: &mut Context<Self>) {
         // ⏎ typed faster than the background search: finish it here. A search over
         // the prepared corpus takes about 10 ms.
         if !self.query_empty() && !self.settled() {
@@ -361,16 +373,20 @@ impl SearchPanel {
         let hits = self.hits();
         let index = active_index(self.hover, self.selection, hits.len());
         if index < hits.len() {
-            self.open_row(index, new_tab, cx);
+            self.open_row(index, new_tab, window, cx);
         }
     }
 
-    fn open_row(&mut self, index: usize, new_tab: bool, cx: &mut Context<Self>) {
-        let Some(id) = self.hits().get(index).map(|r| r.note_id.clone()) else { return };
+    fn open_row(&mut self, index: usize, new_tab: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((id, content_range)) =
+            self.hits().get(index).map(|r| (r.note_id.clone(), r.content_range.clone()))
+        else { return };
         self.workspace.update(cx, |w, cx| {
             w.model.open_note(Some(&id), new_tab);
             w.navigated(cx);
         });
+        // The note is open; a body hit points at where in it the query matched.
+        (self.on_open.clone())(&id, content_range, window, cx);
     }
 
     fn dismiss(&mut self, cx: &mut Context<Self>) {
@@ -435,8 +451,8 @@ impl SearchPanel {
                 }
                 cx.notify();
             }))
-            .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
-                this.open_row(index, e.modifiers().platform, cx);
+            .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                this.open_row(index, e.modifiers().platform, window, cx);
             }))
             .child(div().w(px(16.)).flex_none().flex().justify_center().pt(px(2.)).child(icon))
             .child(

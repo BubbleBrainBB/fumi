@@ -203,6 +203,20 @@ fn shot(name: &str) {
     }
 }
 
+/// Saves this process's own window as a PNG with `screencapture`, for checks
+/// outside the script driver. `FUMI_SHOTS` keeps such tools off ordinary runs.
+pub fn window_shot(path: &str) -> bool {
+    if std::env::var("FUMI_SHOTS").is_err() {
+        return false;
+    }
+    let n = window_number().to_string();
+    std::process::Command::new("/usr/sbin/screencapture")
+        .args(["-x", "-o", "-l", &n, path])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 #[derive(Clone, Copy, Default)]
 struct Sample {
     busy: u64,

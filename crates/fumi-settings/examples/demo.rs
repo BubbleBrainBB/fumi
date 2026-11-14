@@ -45,7 +45,7 @@ impl Demo {
                 w.open_workspace(&path, cx);
             });
         });
-        let search = cx.new(|cx| SearchPanel::new(workspace.clone(), window, cx));
+        let search = cx.new(|cx| SearchPanel::new(workspace.clone(), Rc::new(|_, _, _, _| {}), window, cx));
         let sheet = cx.new(|cx| SettingsSheet::new(workspace.clone(), on_change, window, cx));
         let welcome = cx.new(|cx| WelcomePage::new(workspace.clone(), on_open, window, cx));
         let empty = cx.new(|cx| EmptyLibraryPage::new(workspace.clone(), cx));

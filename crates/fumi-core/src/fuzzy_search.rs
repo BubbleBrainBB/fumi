@@ -210,6 +210,9 @@ pub struct NoteSearchHit<'a> {
     pub subtitle_ranges: Vec<FuzzyRange>,
     /// Body excerpt, when the match is in the note's content.
     pub snippet: Option<Snippet>,
+    /// The match's byte range in `note.content`, when the hit is in the body,
+    /// so opening the note can jump to where it is.
+    pub content_range: Option<Range<usize>>,
 }
 
 impl<'a> NoteSearchHit<'a> {
@@ -223,6 +226,7 @@ impl<'a> NoteSearchHit<'a> {
             subtitle: folder_display_name(note),
             subtitle_ranges: Vec::new(),
             snippet: None,
+            content_range: None,
         }
     }
 }
@@ -365,7 +369,7 @@ fn search<'a>(
     notes: &'a [Note],
     query: &str,
     limit: usize,
-    body: impl Fn(usize, &str) -> Option<(String, FuzzyMatch)>,
+    body: impl Fn(usize, &str) -> Option<(String, FuzzyMatch, Range<usize>)>,
 ) -> Vec<NoteSearchHit<'a>> {
     let q = trim_whitespaces_and_newlines(query);
     if q.is_empty() {
@@ -390,6 +394,7 @@ fn search<'a>(
                     subtitle: tag.clone(),
                     subtitle_ranges: m.ranges(tag),
                     snippet: None,
+                    content_range: None,
                 });
             }
         }
@@ -439,9 +444,9 @@ fn weighted(weight: f64, score: i64) -> i64 {
 fn best_hit<'a>(
     note: &'a Note,
     q: &[&str],
-    body: impl FnOnce() -> Option<(String, FuzzyMatch)>,
+    body: impl FnOnce() -> Option<(String, FuzzyMatch, Range<usize>)>,
 ) -> Option<NoteSearchHit<'a>> {
-    let hit = |score, field, title_ranges, subtitle, subtitle_ranges, snippet| NoteSearchHit {
+    let hit = |score, field, title_ranges, subtitle, subtitle_ranges, snippet, content_range| NoteSearchHit {
         note,
         score,
         field,
@@ -449,6 +454,7 @@ fn best_hit<'a>(
         subtitle,
         subtitle_ranges,
         snippet,
+        content_range,
     };
     let filename = note.filename();
     if let Some(m) = FuzzyMatch::find_clusters(q, &filename) {
@@ -459,22 +465,23 @@ fn best_hit<'a>(
             folder_display_name(note),
             Vec::new(),
             None,
+            None,
         ));
     }
     if !note.title.is_empty()
         && let Some(m) = FuzzyMatch::find_clusters(q, &note.title)
     {
         let ranges = m.ranges(&note.title);
-        return Some(hit(weighted(0.95, m.score), NoteMatchField::Title, Vec::new(), note.title.clone(), ranges, None));
+        return Some(hit(weighted(0.95, m.score), NoteMatchField::Title, Vec::new(), note.title.clone(), ranges, None, None));
     }
     if note.relative_path != "/" {
         let folder = folder_display_name(note);
         if let Some(m) = FuzzyMatch::find_clusters(q, &folder) {
             let ranges = m.ranges(&folder);
-            return Some(hit(weighted(0.75, m.score), NoteMatchField::Folder, Vec::new(), folder, ranges, None));
+            return Some(hit(weighted(0.75, m.score), NoteMatchField::Folder, Vec::new(), folder, ranges, None, None));
         }
     }
-    let (line, m) = body()?;
+    let (line, m, at) = body()?;
     Some(hit(
         weighted(0.55, m.score),
         NoteMatchField::Content,
@@ -482,6 +489,7 @@ fn best_hit<'a>(
         folder_display_name(note),
         Vec::new(),
         Some(snippet(&line, &m)),
+        Some(at),
     ))
 }
 
@@ -516,12 +524,13 @@ fn grapheme_ceil(text: &str, at: usize) -> usize {
     }
 }
 
-/// The body line holding the query, cut to a window around it, or `None`.
+/// The body line holding the query, cut to a window around it, and the hit's
+/// byte range in the whole body, or `None`.
 ///
 /// Bodies are matched literally (ignoring case and width), not as a subsequence:
 /// across a whole note nearly any short query is a subsequence of some line,
 /// "zqx" matched 67 of 499 notes.
-fn content_match(body: &str, folded: &FoldedBody, folded_query: &str) -> Option<(String, FuzzyMatch)> {
+fn content_match(body: &str, folded: &FoldedBody, folded_query: &str) -> Option<(String, FuzzyMatch, Range<usize>)> {
     if folded_query.is_empty() {
         return None;
     }
@@ -577,7 +586,7 @@ fn content_match(body: &str, folded: &FoldedBody, folded_query: &str) -> Option<
             break;
         }
     }
-    Some((text.to_string(), FuzzyMatch::contiguous(first, last - first + 1, text)))
+    Some((text.to_string(), FuzzyMatch::contiguous(first, last - first + 1, text), hit))
 }
 
 // Snippets.
@@ -1014,6 +1023,28 @@ mod tests {
     }
 
     #[test]
+    fn content_hits_carry_where_they_matched() {
+        let body = "first line\nwe talked about Kyoto at length\nlast line";
+        let notes = [with_body("Random note", body)];
+        let found = hits(&notes, "kyoto", DEFAULT_LIMIT);
+        assert_eq!(found[0].field, NoteMatchField::Content);
+        let at = found[0].content_range.clone().expect("body hit says where it matched");
+        assert_eq!(&body[at.clone()], "Kyoto", "the range points at the match in the content");
+
+        // Width-folded matches map back to the original characters.
+        let wide = "見出し\nＫｙｏｔｏに行った";
+        let notes = [with_body("W", wide)];
+        let at = hits(&notes, "kyoto", DEFAULT_LIMIT)[0].content_range.clone().unwrap();
+        assert_eq!(&wide[at], "Ｋｙｏｔｏ");
+
+        // Only body hits carry a range.
+        let by_name = [with_body("Kyoto guide", "nothing here")];
+        assert!(hits(&by_name, "kyoto", DEFAULT_LIMIT)[0].content_range.is_none());
+        let tagged = [note_in("A", "/", &["ai"], "", 2.0, false)];
+        assert!(hits(&tagged, "#ai", DEFAULT_LIMIT)[0].content_range.is_none());
+    }
+
+    #[test]
     fn tag_mode() {
         let tagged = [
             note_in("A", "/", &["ai"], "", 2.0, false),
@@ -1257,18 +1288,20 @@ mod extra_tests {
         let found = hits(&notes, "京都", 1);
         let s = found[0].snippet.as_ref().unwrap();
         assert_eq!(s.text.graphemes(true).count(), 1 + 24 + 2, "ellipsis, then the snippet's own 24");
-        let (line, m) = content_match(&cjk, &FoldedBody::new(&cjk), "京都").unwrap();
+        let (line, m, at) = content_match(&cjk, &FoldedBody::new(&cjk), "京都").unwrap();
         assert_eq!(line.graphemes(true).count(), 122);
         assert_eq!(m.offsets, [120, 121]);
+        assert_eq!(at, 150 * 3..150 * 3 + 6, "the hit, in the whole body");
 
         let emoji = format!("{}京都", "😀".repeat(150));
-        let (line, m) = content_match(&emoji, &FoldedBody::new(&emoji), "京都").unwrap();
+        let (line, m, _) = content_match(&emoji, &FoldedBody::new(&emoji), "京都").unwrap();
         assert_eq!(line.graphemes(true).count(), 62);
         assert_eq!(m.offsets, [60, 61]);
 
         let tail = format!("京都{}", "字".repeat(300));
-        let (line, _) = content_match(&tail, &FoldedBody::new(&tail), "京都").unwrap();
+        let (line, _, at) = content_match(&tail, &FoldedBody::new(&tail), "京都").unwrap();
         assert_eq!(line.graphemes(true).count(), 202);
+        assert_eq!(at, 0..6);
     }
 
     #[test]

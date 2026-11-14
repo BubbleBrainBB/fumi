@@ -246,6 +246,9 @@ pub struct LineEl {
     pub autoscroll: bool,
     /// Visible bytes selected, and whether the selection runs on past the line.
     pub selection: Option<(Range<usize>, bool)>,
+    /// A search hit flashed on this line: display offsets, and the colour at
+    /// its strength right now.
+    pub flash: Option<(Range<usize>, Hsla)>,
     pub hovered: Option<Range<usize>>,
     pub painted: Rc<RefCell<Vec<Painted>>>,
     pub shaped: Rc<RefCell<Option<(Pixels, Rc<Shaped>)>>>,
@@ -511,6 +514,33 @@ impl Element for LineEl {
                         ),
                         c.selection,
                     ));
+                }
+            }
+        }
+
+        // A search hit, flashed: same place as the selection, rounded, tinted
+        // with the accent and fading out.
+        if let Some((range, color)) = &self.flash {
+            for row in laid.rows.iter() {
+                let row_end = row.end.max(row.start);
+                if range.end <= row.start || range.start >= row_end {
+                    continue;
+                }
+                let (a, e) = (range.start.max(row.start), range.end.min(row_end));
+                let x0 = text_x + laid.x_for_index(a) - row.x0 - px(2.);
+                let x1 = text_x + laid.x_for_index(e) - row.x0 + px(2.);
+                if x1 > x0 {
+                    rounded(
+                        Bounds::from_corners(
+                            point(x0, top_y + row.y + px(2.)),
+                            point(x1, top_y + row.y + row.height - px(2.)),
+                        ),
+                        *color,
+                        4.,
+                        true,
+                        true,
+                        window,
+                    );
                 }
             }
         }

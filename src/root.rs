@@ -5,7 +5,7 @@
 use crate::pages::PageHost;
 use fumi_publish::PublishPane;
 use fumi_editor::element::CaretSlot;
-use fumi_settings::search::SearchPanel;
+use fumi_settings::search::{OnOpenNote, SearchPanel};
 use fumi_settings::sheet::{OnChange, SettingsChange, SettingsSheet};
 use fumi_settings::welcome::{OnOpen, WelcomePage};
 use fumi_sidebar::{SidebarEvent, SidebarView};
@@ -99,7 +99,11 @@ impl RootView {
         toolbar.update(cx, |toolbar, _| {
             toolbar.set_live_text(Rc::new(move |cx: &App| live_pages.read(cx).active_text(cx)));
         });
-        let search = cx.new(|cx| SearchPanel::new(workspace.clone(), window, cx));
+        let reveal_pages = pages.clone();
+        let on_open_note: OnOpenNote = Rc::new(move |id, range, _, cx| {
+            reveal_pages.update(cx, |host, cx| host.reveal_match(id, range, cx));
+        });
+        let search = cx.new(|cx| SearchPanel::new(workspace.clone(), on_open_note, window, cx));
 
         let this = cx.entity().downgrade();
         let on_change: OnChange = Rc::new(move |change, window, cx| {
