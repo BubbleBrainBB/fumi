@@ -23,6 +23,11 @@ objc = "0.2"
 cocoa = "0.26"
 libc = "0.2"
 
+# Full debug info made target/debug 11G. Line tables keep file:line in
+# backtraces and panics; set debug = true locally when stepping in lldb.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 debug = false
 incremental = false
