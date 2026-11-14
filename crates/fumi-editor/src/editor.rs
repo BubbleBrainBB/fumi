@@ -187,6 +187,17 @@ pub struct Editor {
     pub blocks: BlockCache,
     selecting: bool,
     press_at: Point<Pixels>,
+    /// The press was past a wrapped row's trailing space: the row's end, and
+    /// the caret it left before that space.
+    press_end: Option<(usize, usize)>,
+    /// The caret stands at the end of a wrapped row, which is the same place in
+    /// the text as the start of the next, where it would otherwise show.
+    /// NSTextView's upstream affinity.
+    pub(crate) head_upstream: bool,
+    /// Whether the move under way puts the caret there. A move that doesn't say
+    /// takes it off, unless the caret hasn't left: `upstream_for` is where it was.
+    want_upstream: Option<bool>,
+    upstream_for: usize,
     dragged: bool,
     caret_on: bool,
     blink_epoch: u64,
@@ -374,6 +385,10 @@ impl Editor {
             blocks: BlockCache::default(),
             selecting: false,
             press_at: Point::default(),
+            press_end: None,
+            head_upstream: false,
+            want_upstream: None,
+            upstream_for: 0,
             dragged: false,
             caret_on: true,
             blink_epoch: 0,
@@ -686,6 +701,11 @@ impl Editor {
     /// selection changes none of that; nor does a press, until it lets go.
     pub(crate) fn caret_moved(&mut self, scroll: bool) {
         metrics::note_change();
+        self.head_upstream = match self.want_upstream.take() {
+            Some(upstream) => upstream,
+            None => self.head_upstream && self.head == self.upstream_for,
+        };
+        self.upstream_for = self.head;
         self.caret_on = true;
         self.blink_epoch = 1;
         if let Some(slot) = &self.caret_slot {
@@ -738,7 +758,7 @@ impl Editor {
         let y = match &item.text {
             Some((d, s)) => {
                 let start = self.doc.line_start(line);
-                let row = s.row_of(d.src_to_disp(at.saturating_sub(start)));
+                let row = s.caret_row(d.src_to_disp(at.saturating_sub(start)), self.head_upstream && at == self.head);
                 item.bounds.top() + d.top + s.laid.rows[row].y
             }
             None => item.bounds.top(),
@@ -1241,6 +1261,7 @@ impl Editor {
         // Up into the properties panel opens it for editing, rather than leaving
         // the caret at its foot.
         if head == 0 && !extend && self.head != 0 && self.has_folded_panel() {
+            self.want_upstream = None;
             self.open_frontmatter();
             return;
         }
@@ -1272,6 +1293,7 @@ impl Editor {
     fn vertical(&mut self, down: bool, extend: bool, window: &mut Window) {
         if !extend && !self.selection_is_empty() {
             let edge = if down { self.selection().end } else { self.selection().start };
+            self.head_upstream &= edge == self.head;
             self.anchor = edge;
             self.head = edge;
         }
@@ -1279,7 +1301,7 @@ impl Editor {
         let start = self.doc.line_start(line);
         let (d, s) = self.shape_line(line, self.reveal_offset(line), window);
         let disp = d.src_to_disp(self.head - start);
-        let row = s.row_of(disp);
+        let row = s.caret_row(disp, self.head_upstream);
         let x = self.goal_x.unwrap_or(d.indent + s.x_of(disp, row));
         self.goal_x = Some(x);
 
@@ -1290,8 +1312,11 @@ impl Editor {
         while rows.get(next_row).is_some_and(|r| r.fill) {
             next_row = if down { next_row + 1 } else { next_row.wrapping_sub(1) };
         }
+        let mut upstream = false;
         let target = if next_row < s.row_count() {
-            start + d.disp_to_src(s.index_at(next_row, x - d.indent))
+            let (at, up) = caret_in(&d, &s, next_row, x - d.indent);
+            upstream = up;
+            start + d.disp_to_src(at)
         } else if down && line + 1 >= self.doc.line_count() {
             self.doc.len()
         } else if !down && line == 0 {
@@ -1307,9 +1332,12 @@ impl Editor {
             } else {
                 let (nd, ns) = self.shape_line(next, self.reveal_offset(next), window);
                 let r = if down { 0 } else { ns.row_count() - 1 };
-                self.doc.line_start(next) + nd.disp_to_src(ns.index_at(r, x - nd.indent))
+                let (at, up) = caret_in(&nd, &ns, r, x - nd.indent);
+                upstream = up;
+                self.doc.line_start(next) + nd.disp_to_src(at)
             }
         };
+        self.want_upstream = Some(upstream);
         self.set_head(target, extend, true);
     }
 
@@ -1325,22 +1353,24 @@ impl Editor {
         if end { self.doc.line_end(line) } else { self.doc.line_start(line) }
     }
 
-    /// ⌘← and ⌘→: the ends of the row the caret is on, on a wrapped line too.
-    fn row_edge(&self, end: bool, window: &Window) -> usize {
+    /// ⌘← and ⌘→: the ends of the row the caret is on, on a wrapped line too,
+    /// and whether the caret stands at the row's end where the line wraps.
+    fn row_edge(&self, end: bool, window: &Window) -> (usize, bool) {
         let line = self.doc.line_of(self.head);
         let start = self.doc.line_start(line);
         let (d, s) = self.shape_line(line, self.reveal_offset(line), window);
-        let row = s.row_of(d.src_to_disp(self.head - start));
+        let row = s.caret_row(d.src_to_disp(self.head - start), self.head_upstream);
         let r = s.laid.rows[row];
-        let disp = if !end {
-            r.start
-        } else if row + 1 == s.laid.rows.len() {
-            r.end
-        } else {
-            // Its end is the next row's start, so stop before the last character.
-            s.laid.last_index_before(r.end).max(r.start)
-        };
-        start + d.disp_to_src(disp)
+        // Anywhere past the row's last character.
+        let past = s.x_of(r.end, row) + px(100.);
+        let (disp, upstream) = if end { caret_in(&d, &s, row, past) } else { (r.start, false) };
+        (start + d.disp_to_src(disp), upstream)
+    }
+
+    fn to_row_edge(&mut self, end: bool, extend: bool, window: &Window) {
+        let (at, upstream) = self.row_edge(end, window);
+        self.want_upstream = Some(upstream);
+        self.set_head(at, extend, false);
     }
 
     fn delete_to(&mut self, to: usize, cx: &mut Context<Self>) {
@@ -1402,10 +1432,10 @@ impl Editor {
         let el = act!(el, WordRight, |this, _w| this.set_head(this.word_boundary(this.head, true), false, false));
         let el = act!(el, SelectWordLeft, |this, _w| this.set_head(this.word_boundary(this.head, false), true, false));
         let el = act!(el, SelectWordRight, |this, _w| this.set_head(this.word_boundary(this.head, true), true, false));
-        let el = act!(el, LineStart, |this, w| this.set_head(this.row_edge(false, w), false, false));
-        let el = act!(el, LineEnd, |this, w| this.set_head(this.row_edge(true, w), false, false));
-        let el = act!(el, SelectLineStart, |this, w| this.set_head(this.row_edge(false, w), true, false));
-        let el = act!(el, SelectLineEnd, |this, w| this.set_head(this.row_edge(true, w), true, false));
+        let el = act!(el, LineStart, |this, w| this.to_row_edge(false, false, w));
+        let el = act!(el, LineEnd, |this, w| this.to_row_edge(true, false, w));
+        let el = act!(el, SelectLineStart, |this, w| this.to_row_edge(false, true, w));
+        let el = act!(el, SelectLineEnd, |this, w| this.to_row_edge(true, true, w));
         let el = act!(el, ParagraphStart, |this, _w| this.set_head(this.paragraph_edge(false), false, false));
         let el = act!(el, ParagraphEnd, |this, _w| this.set_head(this.paragraph_edge(true), false, false));
         let el = act!(el, ScrollToStart, |this, _w| this.list.scroll_to(ListOffset { item_ix: 0, offset_in_item: px(0.) }));
@@ -1422,7 +1452,7 @@ impl Editor {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &DeleteToRowStart, window, cx| {
-                let to = this.row_edge(false, window);
+                let to = this.row_edge(false, window).0;
                 this.delete_to(to, cx);
                 cx.notify();
             }))
@@ -1546,7 +1576,25 @@ impl Editor {
 
     // Mouse ----------------------------------------------------------------
 
+    /// The character boundary under `p`, never a wrapped row's end: what's there
+    /// is on the row.
     pub fn hit_test(&self, p: Point<Pixels>) -> usize {
+        self.boundary_under(p, Boundary::Inside).0
+    }
+
+    /// Where a click at `p` puts the caret, and whether that's at the end of a
+    /// wrapped row.
+    fn caret_under(&self, p: Point<Pixels>) -> (usize, bool) {
+        self.boundary_under(p, Boundary::Caret)
+    }
+
+    /// Where a selection reaching `p` ends, and whether that's at the end of a
+    /// wrapped row: past its last character it is, trailing space and all.
+    fn extent_under(&self, p: Point<Pixels>) -> (usize, bool) {
+        self.boundary_under(p, Boundary::Extent)
+    }
+
+    fn boundary_under(&self, p: Point<Pixels>, what: Boundary) -> (usize, bool) {
         let painted = self.painted.borrow();
         let hit = painted
             .iter()
@@ -1557,7 +1605,7 @@ impl Editor {
                     (f32::from(d) * 100.) as i64
                 })
             });
-        let Some(item) = hit else { return self.head };
+        let Some(item) = hit else { return (self.head, false) };
         let start = self.doc.line_start(item.first_line);
         match &item.text {
             // A block's right half is its trailing edge, as a caret placed
@@ -1565,13 +1613,21 @@ impl Editor {
             None if self.items[self.item_of(item.first_line)].kind != ItemKind::Front
                 && p.x > item.bounds.center().x =>
             {
-                self.doc.line_end(item.first_line + item.n_lines - 1)
+                (self.doc.line_end(item.first_line + item.n_lines - 1), false)
             }
-            None => start,
+            None => (start, false),
             Some((d, s)) => {
                 let row = s.row_at(p.y - item.bounds.top() - d.top);
                 let x = p.x - item.bounds.left() - d.margin - d.indent;
-                start + d.disp_to_src(s.index_at(row, x))
+                let (at, upstream) = match what {
+                    Boundary::Inside => (s.index_at(row, x), false),
+                    Boundary::Caret => caret_in(d, s, row, x),
+                    Boundary::Extent => {
+                        let end = s.extent_at(row, x);
+                        (end, end != s.index_at(row, x))
+                    }
+                };
+                (start + d.disp_to_src(at), upstream)
             }
         }
     }
@@ -1708,7 +1764,16 @@ impl Editor {
                 self.press_at = e.position;
                 self.dragged = false;
                 self.hold_reveal = true;
-                self.set_head_from_mouse(at, e.modifiers.shift);
+                let (end, end_upstream) = self.extent_under(e.position);
+                let (caret, upstream) = self.caret_under(e.position);
+                self.press_end = (end != caret && !e.modifiers.shift).then_some((end, caret));
+                if e.modifiers.shift {
+                    self.want_upstream = Some(end_upstream);
+                    self.set_head_from_mouse(end, true);
+                } else {
+                    self.want_upstream = Some(upstream);
+                    self.set_head_from_mouse(caret, false);
+                }
             }
         }
         cx.notify();
@@ -1732,6 +1797,7 @@ impl Editor {
                 let head = self.hit_test(at);
                 self.selecting = true;
                 self.press_at = at;
+                self.press_end = None;
                 self.dragged = true;
                 self.hold_reveal = true;
                 self.set_head_from_mouse(head, false);
@@ -1774,8 +1840,21 @@ impl Editor {
             return;
         }
         self.dragged = true;
-        let at = self.hit_test(p);
-        if at != self.head {
+        let (mut at, mut upstream) = self.extent_under(p);
+        // A press past a wrapped row's trailing space left the caret before the
+        // space, where the words end. The selection dragged out of it starts at
+        // the row's end, as NSTextView's does, and back there it is that caret.
+        let anchor = match self.press_end {
+            Some((end, caret)) if at == end => {
+                (at, upstream) = (caret, false);
+                caret
+            }
+            Some((end, _)) => end,
+            None => self.anchor,
+        };
+        if at != self.head || anchor != self.anchor || upstream != self.head_upstream {
+            self.anchor = anchor;
+            self.want_upstream = Some(upstream);
             self.set_head_from_mouse(at, true);
             cx.notify();
         }
@@ -2011,6 +2090,7 @@ impl Editor {
                 display,
                 caret,
                 caret_head: head_here.then_some(display_head),
+                caret_upstream: self.head_upstream,
                 caret_slot: self.caret_slot.clone(),
                 autoscroll,
                 selection,
@@ -2616,8 +2696,16 @@ impl Editor {
             .iter()
             .map(|i| format!("{}@{:.0}+{:.0}", i.first_line, f32::from(i.bounds.top()), f32::from(i.bounds.size.height)))
             .collect();
+        // The caret's row in its line and its x in the column, as it is drawn.
+        let line = self.doc.line_of(self.head);
+        let caret = self.painted.borrow().iter().find(|i| i.first_line == line).and_then(|i| {
+            let (d, s) = i.text.as_ref()?;
+            let disp = d.src_to_disp(self.head - self.doc.line_start(line));
+            let row = s.caret_row(disp, self.head_upstream);
+            Some((row, f32::from(s.x_of(disp, row)).round()))
+        });
         format!(
-            "frames={} doc_bytes={} head={} anchor={} caret_line={} top=({},{:.1}) items={} panel={} players={players:?} painted={painted:?}",
+            "frames={} doc_bytes={} head={} anchor={} caret={caret:?} caret_line={} top=({},{:.1}) items={} panel={} players={players:?} painted={painted:?}",
             metrics::frames(),
             self.doc.len(),
             self.head,
@@ -2878,7 +2966,7 @@ impl EntityInputHandler for Editor {
             return Some(item.bounds);
         };
         let disp = d.src_to_disp(at - start);
-        let row = s.row_of(disp);
+        let row = s.caret_row(disp, self.head_upstream && at == self.head);
         let x = s.x_of(disp, row);
         let r = s.laid.rows[row];
         let origin = item.bounds.origin + point(d.margin + d.indent + x, d.top + r.y);
@@ -2905,6 +2993,24 @@ impl EntityInputHandler for Editor {
 const FADE_BAND: f32 = 30. * 0.75;
 
 /// A fence's info string's first word: its language.
+/// Which boundary a point in the text stands for.
+#[derive(Clone, Copy)]
+enum Boundary {
+    Inside,
+    Caret,
+    Extent,
+}
+
+/// Where a caret goes for `x` in `row`, and whether it stands at the row's end
+/// where the line wraps. Past the row's last character it does, as in NSTextView,
+/// unless that's a space: a space hangs off the row, and the caret stays before
+/// it, where the words end.
+fn caret_in(d: &DisplayLine, s: &Shaped, row: usize, x: Pixels) -> (usize, bool) {
+    let (at, end) = (s.index_at(row, x), s.extent_at(row, x));
+    let hangs = d.text.as_ref().get(at..end).is_none_or(|last| last.chars().all(char::is_whitespace));
+    if end != at && !hangs { (end, true) } else { (at, false) }
+}
+
 fn fence_language(line: &str) -> &str {
     line.trim().trim_start_matches(['`', '~']).split_whitespace().next().unwrap_or("")
 }

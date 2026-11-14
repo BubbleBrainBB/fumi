@@ -345,6 +345,13 @@ impl Laid {
         if self.rows[row].fill && self.rows[row].start == index { row - 1 } else { row }
     }
 
+    /// The row a caret shows on at `index`. Where the line wraps, a row's end is
+    /// the next row's start: `upstream` is the caret that stands at the end.
+    pub fn caret_row(&self, index: usize, upstream: bool) -> usize {
+        let row = self.row_of(index);
+        if upstream && row > 0 && self.rows[row].start == index { row - 1 } else { row }
+    }
+
     /// The row holding what starts at byte `index`.
     pub fn row_holding(&self, index: usize) -> usize {
         self.rows
@@ -359,8 +366,19 @@ impl Laid {
         self.x_for_index(index) - self.rows[row].x0
     }
 
-    /// The boundary nearest to `x` (relative to the row's text edge) in `row`.
+    /// The boundary nearest to `x` (relative to the row's text edge) in `row`,
+    /// for a caret: one that shows on this row.
     pub fn index_at(&self, row: usize, x: Pixels) -> usize {
+        self.boundary_at(row, x, false)
+    }
+
+    /// The same for the end of a selection, which has no row to show on: past a
+    /// wrapped row's last glyph is the row's end, and takes that glyph in.
+    pub fn extent_at(&self, row: usize, x: Pixels) -> usize {
+        self.boundary_at(row, x, true)
+    }
+
+    fn boundary_at(&self, row: usize, x: Pixels, extent: bool) -> usize {
         let row = row.min(self.rows.len() - 1);
         let r = self.rows[row];
         let target = r.x0 + x;
@@ -388,13 +406,15 @@ impl Laid {
             last_box = Some(at);
         }
         // Past the last glyph: the row's end, unless that's the next row's start.
+        // A revealed image's row starts where its source ends, and that boundary
+        // shows on the source's row.
         let end_x = if r.end < self.run_x_total_len() {
             self.x_for_index(r.end)
         } else {
             self.width()
         };
         if (end_x - target).abs() < best_d {
-            let last = row + 1 == self.rows.len();
+            let last = extent || self.rows.get(row + 1).is_none_or(|next| next.fill);
             return if last { r.end } else { self.last_index_before(r.end).max(r.start).max(last_box.unwrap_or(0)) };
         }
         best
@@ -491,6 +511,54 @@ mod tests {
     fn trailing_spaces_do_not_wrap() {
         let t = "abcd      ";
         assert!(wrap(t, &bounds(t, 10.), 100., 0., 40.).is_empty());
+    }
+
+    #[core::prelude::v1::test]
+    fn past_a_rows_last_glyph_is_its_end_only_where_the_caret_can_show_there() {
+        // "ab)" then a box on a row of its own, ten points a character.
+        let glyph = |k: usize| Glyph {
+            x: px(k as f32 * 10.),
+            id: GlyphId(0),
+            font: FontId(0),
+            size: px(10.),
+            color: Hsla::default(),
+            index: k as u32,
+            emoji: false,
+        };
+        let row = |start, end, x0: f32, fill| Row {
+            start,
+            end,
+            x0: px(x0),
+            y: px(0.),
+            height: px(10.),
+            box_tall: px(0.),
+            math_above: px(0.),
+            math_depth: px(0.),
+            fill,
+        };
+        let laid = |fill| Laid {
+            glyphs: (0..3).map(glyph).collect(),
+            run_x: vec![px(0.), px(30.), px(130.)],
+            run_at: vec![0, 3, 6],
+            rows: vec![row(0, 3, 0., false), row(3, 6, 30., fill)],
+            height: px(20.),
+            boxes: vec![3],
+        };
+        // A revealed image's row starts at its source's end, which shows on the
+        // source's row: a drag past ")" takes it in.
+        assert_eq!(laid(true).index_at(0, px(200.)), 3);
+        assert_eq!(laid(true).row_of(3), 0);
+        // An ordinary wrap's end shows on the next row, so it stops short.
+        assert_eq!(laid(false).index_at(0, px(200.)), 2);
+        assert_eq!(laid(true).index_at(0, px(21.)), 2);
+        // A selection's end shows nowhere, and takes the row's last glyph in.
+        assert_eq!(laid(false).extent_at(0, px(200.)), 3);
+        assert_eq!(laid(false).extent_at(0, px(21.)), 2);
+        // A caret there shows on the next row, unless it is the one that stands
+        // at the row's end.
+        assert_eq!((laid(false).caret_row(3, false), laid(false).caret_row(3, true)), (1, 0));
+        assert_eq!(laid(false).x_in_row(3, 0), px(30.));
+        assert_eq!((laid(false).caret_row(2, true), laid(false).caret_row(0, true)), (0, 0));
     }
 
     #[core::prelude::v1::test]

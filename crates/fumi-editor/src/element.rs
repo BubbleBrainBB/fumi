@@ -38,6 +38,10 @@ impl Shaped {
         self.laid.row_of(disp)
     }
 
+    pub fn caret_row(&self, disp: usize, upstream: bool) -> usize {
+        self.laid.caret_row(disp, upstream)
+    }
+
     /// Distance from the text column; negative inside hung syntax.
     pub fn x_of(&self, disp: usize, row: usize) -> Pixels {
         self.laid.x_in_row(disp, row)
@@ -45,6 +49,10 @@ impl Shaped {
 
     pub fn index_at(&self, row: usize, x: Pixels) -> usize {
         self.laid.index_at(row, x)
+    }
+
+    pub fn extent_at(&self, row: usize, x: Pixels) -> usize {
+        self.laid.extent_at(row, x)
     }
 
     pub fn row_count(&self) -> usize {
@@ -242,6 +250,8 @@ pub struct LineEl {
     pub caret: Option<usize>,
     /// Where the caret is on this line, drawn or not (it blinks).
     pub caret_head: Option<usize>,
+    /// The caret stands at the end of a wrapped row, not at the start of the next.
+    pub caret_upstream: bool,
     pub caret_slot: Option<Rc<CaretSlot>>,
     pub autoscroll: bool,
     /// Visible bytes selected, and whether the selection runs on past the line.
@@ -377,7 +387,7 @@ impl Element for LineEl {
             let x = bounds.left() + d.margin + d.indent + shaped.x_of(*disp, row);
             cell.set(Some(Bounds::new(point(x, bounds.top() + d.top + r.y), size(px(1.), r.height))));
         }
-        let row = shaped.row_of(self.caret_head.unwrap_or(0));
+        let row = shaped.caret_row(self.caret_head.unwrap_or(0), self.caret_upstream);
         let top = bounds.top() + d.top + shaped.laid.rows[row].y;
         let height = shaped.laid.rows[row].height;
         // Heights above may have changed: put this row back where it stood.
@@ -499,6 +509,10 @@ impl Element for LineEl {
                     continue;
                 }
                 if range.start == range.end && !*past_end {
+                    continue;
+                }
+                // Starting where a row wraps, it starts on the row below.
+                if range.start == row_end && laid.rows.get(i + 1).is_some_and(|next| !next.fill) {
                     continue;
                 }
                 let (a, e) = (range.start.max(row.start), range.end.min(row_end));
@@ -804,7 +818,7 @@ impl Element for LineEl {
         }
 
         if let Some(caret) = self.caret {
-            let row = shaped.row_of(caret);
+            let row = shaped.caret_row(caret, self.caret_upstream);
             let x = shaped.x_of(caret, row);
             let r = laid.rows[row];
             let base = top_y + r.y + shaped.baseline(row);

@@ -425,7 +425,7 @@ fn post_mouse_move(x: f64, y: f64) {
 /// `FUMI_DRIVE=script FUMI_SCRIPT=file`: one step a line, for checking things on
 /// screen in a fixture. `click x y`, `move x y`, `drag x0 y0 x1 y1`, `wheel dy`
 /// (over the point 550,400), `drop path`, `paste name` (a named pasteboard), `lines a b`, `key left|right|up|down|enter|backspace`, `type text`, `wait ms`, `shot
-/// file.png`, `state`, `press x y` / `dragto x y` / `release x y`, `selectall`, `highlight` (⇧⌘H).
+/// file.png`, `state`, `press x y` / `dragto x y` / `release x y`, `selectall`, `highlight` (⇧⌘H), `rowend` (⌘→).
 async fn run_script(window: WindowHandle<Editor>, cx: &mut AsyncApp) {
     let path = std::env::var("FUMI_SCRIPT").unwrap_or_default();
     let script = std::fs::read_to_string(&path).unwrap_or_default();
@@ -443,6 +443,7 @@ async fn run_script(window: WindowHandle<Editor>, cx: &mut AsyncApp) {
             "dragto" => post_mouse(6, n[0], n[1]),
             "release" => post_mouse(2, n[0], n[1]),
             "highlight" => post(&Key { chars: "h".into(), plain: "H".into(), code: 4, flags: FLAG_CMD | (1 << 17) }),
+            "rowend" => post(&Key { flags: FLAG_CMD | FLAG_NUMPAD | FLAG_FN, ..k_right() }),
             "selectall" => post(&Key { chars: "a".into(), plain: "a".into(), code: 0, flags: FLAG_CMD }),
             "wait" => sleep(cx, n[0] as u64).await,
             "shot" => println!("SHOT {rest} {}", self_shot(rest)),
@@ -853,7 +854,7 @@ async fn clickall(window: WindowHandle<Editor>, cx: &mut AsyncApp) {
                     let caret_x = e.painted.borrow().iter().find(|i| i.first_line == line).and_then(|i| {
                         let (d, s) = i.text.as_ref()?;
                         let disp = d.src_to_disp(e.head - e.doc.line_start(line));
-                        let row = s.row_of(disp);
+                        let row = s.caret_row(disp, e.head_upstream);
                         Some(f32::from(i.bounds.left() + d.margin + d.indent + s.x_of(disp, row)))
                     });
                     (line, e.selection_is_empty(), e.list.logical_scroll_top(), caret_x)
@@ -911,7 +912,7 @@ async fn clickall(window: WindowHandle<Editor>, cx: &mut AsyncApp) {
                         let i = p.iter().find(|i| i.first_line == line)?;
                         let (d, s) = i.text.as_ref()?;
                         let disp = d.src_to_disp(e.head - e.doc.line_start(line));
-                        let row = s.row_of(disp);
+                        let row = s.caret_row(disp, e.head_upstream);
                         Some((line, row + 1 == s.row_count(), f32::from(i.bounds.left() + d.margin + d.indent + s.x_of(disp, row))))
                     })
                     .unwrap();
