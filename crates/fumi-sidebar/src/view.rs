@@ -816,7 +816,14 @@ impl SidebarView {
                 div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).text_color(c.text).text_center().child(dialog.title.clone()),
             )
             .when(!dialog.message.is_empty(), |panel| {
-                panel.child(div().text_size(px(12.)).text_color(c.text2).text_center().child(dialog.message.clone()))
+                panel.child(
+                    div()
+                        .text_size(px(12.))
+                        .line_height(px(17.))
+                        .text_color(c.text2)
+                        .text_center()
+                        .child(dialog.message.clone()),
+                )
             })
             .when_some(dialog.field.clone(), |panel, field| {
                 panel.child(

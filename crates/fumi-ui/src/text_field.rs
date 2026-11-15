@@ -119,6 +119,8 @@ pub struct TextField {
     redo: Vec<(String, usize)>,
     layout: Option<ShapedLayout>,
     bounds: Option<Bounds<Pixels>>,
+    /// How far a single line is scrolled left to keep the caret visible.
+    scroll_x: Pixels,
     selecting: bool,
     caret_on: bool,
     blink_epoch: u64,
@@ -164,6 +166,7 @@ impl TextField {
             redo: Vec::new(),
             layout: None,
             bounds: None,
+            scroll_x: px(0.),
             selecting: false,
             caret_on: true,
             blink_epoch: 0,
@@ -332,10 +335,11 @@ impl TextField {
         let (Some(layout), Some(bounds)) = (&self.layout, self.bounds) else { return self.head };
         let mut y = bounds.top();
         let lh = layout.line_height;
+        let offset = if self.multiline { px(0.) } else { self.scroll_x };
         for (line, start) in &layout.lines {
             let h = lh * (line.wrap_boundaries().len() + 1) as f32;
             if p.y < y + h {
-                let rel = point(p.x - bounds.left(), p.y - y);
+                let rel = point(p.x - bounds.left() + offset, p.y - y);
                 return start + line.closest_index_for_position(rel, lh).unwrap_or_else(|i| i);
             }
             y += h;
@@ -479,7 +483,8 @@ impl EntityInputHandler for TextField {
         let layout = self.layout.as_ref()?;
         let at = self.from_utf16(range.start);
         let p = caret_position(layout, at)?;
-        Some(Bounds::new(bounds.origin + p, size(px(1.), layout.line_height)))
+        let offset = if self.multiline { px(0.) } else { self.scroll_x };
+        Some(Bounds::new(bounds.origin + point(p.x - offset, p.y), size(px(1.), layout.line_height)))
     }
 
     fn character_index_for_point(&mut self, p: Point<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
@@ -500,6 +505,21 @@ fn caret_position(layout: &ShapedLayout, at: usize) -> Option<Point<Pixels>> {
         y += lh * (line.wrap_boundaries().len() + 1) as f32;
     }
     None
+}
+
+/// Horizontal scroll for a single-line field: keep the caret just inside the
+/// visible text, without scrolling past either end of the line.
+fn scroll_x_for_caret(caret: Pixels, text: Pixels, visible: Pixels, current: Pixels) -> Pixels {
+    let margin = px(4.);
+    let max = (text - visible + margin).max(px(0.));
+    let next = if caret < current + margin {
+        caret - margin
+    } else if caret + margin > current + visible {
+        caret + margin - visible
+    } else {
+        current
+    };
+    next.max(px(0.)).min(max)
 }
 
 impl Focusable for TextField {
@@ -795,24 +815,27 @@ impl Element for FieldText {
         cx: &mut App,
     ) {
         let c = t();
-        let (focus, anchor, head, caret_on, lh, caret_color, selection_color) = {
+        let (focus, anchor, head, caret_on, lh, multiline, scroll_x, caret_color, selection_color) = {
             let f = self.field.read(cx);
-            (f.focus.clone(), f.anchor, f.head, f.caret_on, f.line_height, f.caret_color, f.selection_color)
+            (f.focus.clone(), f.anchor, f.head, f.caret_on, f.line_height, f.multiline, f.scroll_x, f.caret_color, f.selection_color)
         };
         let (caret_color, selection_color) = (caret_color.unwrap_or(c.accent), selection_color.unwrap_or(c.selection));
         window.handle_input(&focus, ElementInputHandler::new(bounds, self.field.clone()), cx);
         let focused = focus.is_focused(window);
+        let mask = Some(ContentMask { bounds });
         if let Some(styled) = prepaint.styled.take() {
-            if focused && anchor != head && !prepaint.placeholder {
-                for rect in styled.selection(anchor.min(head)..anchor.max(head)) {
-                    window.paint_quad(fill(Bounds::new(bounds.origin + rect.origin, rect.size), selection_color));
+            window.with_content_mask(mask, |window| {
+                if focused && anchor != head && !prepaint.placeholder {
+                    for rect in styled.selection(anchor.min(head)..anchor.max(head)) {
+                        window.paint_quad(fill(Bounds::new(bounds.origin + rect.origin, rect.size), selection_color));
+                    }
                 }
-            }
-            styled.paint(bounds.origin, window, cx);
-            if focused && caret_on && anchor == head {
-                let (p, h) = styled.caret(if prepaint.placeholder { 0 } else { head });
-                window.paint_quad(fill(Bounds::new(bounds.origin + p, size(px(1.5), h)), caret_color));
-            }
+                styled.paint(bounds.origin, window, cx);
+                if focused && caret_on && anchor == head {
+                    let (p, h) = styled.caret(if prepaint.placeholder { 0 } else { head });
+                    window.paint_quad(fill(Bounds::new(bounds.origin + p, size(px(1.5), h)), caret_color));
+                }
+            });
             self.field.update(cx, |f, _| {
                 f.layout = None;
                 f.styled = Some(styled);
@@ -824,62 +847,69 @@ impl Element for FieldText {
             lines: std::mem::take(&mut prepaint.lines),
             line_height: lh,
         };
-        // Selection, row by row.
-        if focused && anchor != head && !prepaint.placeholder {
-            let (a, e) = (anchor.min(head), anchor.max(head));
-            let mut y = bounds.top();
-            for (line, start) in &layout.lines {
-                let rows = line.wrap_boundaries().len() + 1;
-                let end = start + line.len();
-                if e >= *start && a <= end {
-                    let from = a.max(*start) - start;
-                    let to = e.min(end) - start;
-                    if let (Some(p0), Some(p1)) =
-                        (line.position_for_index(from, lh), line.position_for_index(to, lh))
-                    {
-                        let mut row_y = p0.y;
-                        while row_y <= p1.y {
-                            let x0 = if row_y == p0.y { p0.x } else { px(0.) };
-                            let x1 = if row_y == p1.y { p1.x } else { bounds.size.width };
-                            window.paint_quad(fill(
-                                Bounds::from_corners(
-                                    point(bounds.left() + x0, y + row_y),
-                                    point(bounds.left() + x1, y + row_y + lh),
-                                ),
-                                selection_color,
-                            ));
-                            row_y += lh;
+        let text_width = layout.lines.first().map_or(px(0.), |(line, _)| line.width());
+        let caret_x = caret_position(&layout, head).map_or(px(0.), |p| p.x);
+        let scroll_x = if multiline { px(0.) } else { scroll_x_for_caret(caret_x, text_width, bounds.size.width, scroll_x) };
+        window.with_content_mask(mask, |window| {
+            // Selection, row by row.
+            if focused && anchor != head && !prepaint.placeholder {
+                let (a, e) = (anchor.min(head), anchor.max(head));
+                let mut y = bounds.top();
+                for (line, start) in &layout.lines {
+                    let rows = line.wrap_boundaries().len() + 1;
+                    let end = start + line.len();
+                    if e >= *start && a <= end {
+                        let from = a.max(*start) - start;
+                        let to = e.min(end) - start;
+                        if let (Some(p0), Some(p1)) =
+                            (line.position_for_index(from, lh), line.position_for_index(to, lh))
+                        {
+                            let mut row_y = p0.y;
+                            while row_y <= p1.y {
+                                let x0 = if row_y == p0.y { p0.x - scroll_x } else { -scroll_x };
+                                let x1 = if row_y == p1.y { p1.x - scroll_x } else { bounds.size.width - scroll_x };
+                                window.paint_quad(fill(
+                                    Bounds::from_corners(
+                                        point(bounds.left() + x0, y + row_y),
+                                        point(bounds.left() + x1, y + row_y + lh),
+                                    ),
+                                    selection_color,
+                                ));
+                                row_y += lh;
+                            }
                         }
                     }
+                    y += lh * rows as f32;
                 }
+            }
+            let mut y = bounds.top();
+            for (line, _) in &layout.lines {
+                let rows = line.wrap_boundaries().len() + 1;
+                let _ = line.paint(point(bounds.left() - scroll_x, y), lh, TextAlign::Left, None, window, cx);
                 y += lh * rows as f32;
             }
-        }
-        let mut y = bounds.top();
-        for (line, _) in &layout.lines {
-            let rows = line.wrap_boundaries().len() + 1;
-            let _ = line.paint(point(bounds.left(), y), lh, TextAlign::Left, None, window, cx);
-            y += lh * rows as f32;
-        }
-        if focused && caret_on && anchor == head {
-            let p = if prepaint.placeholder { Some(point(px(0.), px(0.))) } else { caret_position(&layout, head) };
-            if let Some(p) = p {
-                window.paint_quad(fill(
-                    Bounds::new(bounds.origin + p + point(px(0.), px(1.)), size(px(1.5), lh - px(2.))),
-                    caret_color,
-                ));
+            if focused && caret_on && anchor == head {
+                let p = if prepaint.placeholder { Some(point(px(0.), px(0.))) } else { caret_position(&layout, head) };
+                if let Some(p) = p {
+                    window.paint_quad(fill(
+                        Bounds::new(bounds.origin + point(p.x - scroll_x, p.y) + point(px(0.), px(1.)), size(px(1.5), lh - px(2.))),
+                        caret_color,
+                    ));
+                }
             }
-        }
+        });
         self.field.update(cx, |f, _| {
             f.layout = Some(layout);
             f.bounds = Some(bounds);
+            f.scroll_x = scroll_x;
         });
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::smart_substitution;
+    use super::{scroll_x_for_caret, smart_substitution};
+    use gpui::px;
 
     #[core::prelude::v1::test]
     fn quotes_curl_by_what_is_before_them() {
@@ -895,5 +925,14 @@ mod tests {
         assert_eq!(smart_substitution("a-", "-"), Some((1, "—".into())));
         assert_eq!(smart_substitution("a", "-"), None);
         assert_eq!(smart_substitution("a", "b"), None);
+    }
+
+    #[core::prelude::v1::test]
+    fn single_line_scrolls_to_keep_the_caret_visible() {
+        assert_eq!(scroll_x_for_caret(px(10.), px(200.), px(100.), px(0.)), px(0.));
+        assert_eq!(scroll_x_for_caret(px(180.), px(200.), px(100.), px(0.)), px(84.));
+        assert_eq!(scroll_x_for_caret(px(180.), px(200.), px(100.), px(84.)), px(84.));
+        assert_eq!(scroll_x_for_caret(px(8.), px(200.), px(100.), px(84.)), px(4.));
+        assert_eq!(scroll_x_for_caret(px(20.), px(60.), px(100.), px(0.)), px(0.));
     }
 }
