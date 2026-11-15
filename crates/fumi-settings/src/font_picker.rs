@@ -162,6 +162,7 @@ impl FontPicker {
                 let choose = name.clone();
                 div()
                     .id(("font-row", ix))
+                    .w_full()
                     .flex()
                     .items_center()
                     .justify_between()
