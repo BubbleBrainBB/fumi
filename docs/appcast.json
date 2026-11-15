@@ -1,0 +1,15 @@
+{
+  "versions": [
+    {
+      "version": "0.4.1",
+      "build": 1,
+      "date": "2026-11-14",
+      "notes": "Rust + GPUI rewrite. Notes are local Markdown files with live preview and publishing to WeChat and Xiaohongshu.",
+      "asset": {
+        "url": "https://github.com/BubbleBrainBB/fumi/releases/download/v0.4.1/Fumi-0.4.1-arm64.dmg",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "min_os": "14.0"
+    }
+  ]
+}

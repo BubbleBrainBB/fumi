@@ -24,7 +24,7 @@ actions!(
         GoToLibrary9, NextTab, PreviousTab, TogglePinTab, SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5,
         SelectTab6, SelectTab7, SelectTab8, SelectTab9, About, HideApp, HideOthers, ShowAll, Quit, Minimize, Zoom,
         BringAllToFront, ShowHelp, MenuUndo, MenuRedo, MenuCut, MenuCopy, MenuPaste, MenuSelectAll, MenuBold,
-        MenuItalic, MenuHighlight, MenuInsertLink, MenuToggleTodo,
+        MenuItalic, MenuHighlight, MenuInsertLink, MenuToggleTodo, CheckForUpdates,
     ]
 );
 

@@ -43,6 +43,7 @@ pub fn build(state: &MenuState) -> Vec<Menu> {
     let app = Menu::new("Fumi").items([
         item("About Fumi", About),
         MenuItem::separator(),
+        item("Check for Updates…", CheckForUpdates),
         item("Settings…", OpenSettings),
         MenuItem::separator(),
         MenuItem::os_submenu("Services", SystemMenuType::Services),
@@ -148,6 +149,14 @@ mod tests {
         let bar = build(&MenuState::default());
         let names: Vec<&str> = bar.iter().map(|m| m.name.as_ref()).collect();
         assert_eq!(names, ["Fumi", "File", "Edit", "View", "Format", "Window", "Help"]);
+    }
+
+    #[core::prelude::v1::test]
+    fn the_app_menu_offers_updates_and_settings() {
+        let bar = build(&MenuState::default());
+        let app = lines(menu(&bar, "Fumi"));
+        assert!(app.contains(&"Check for Updates…=fumi::CheckForUpdates".to_string()));
+        assert!(app.contains(&"Settings…=fumi::OpenSettings".to_string()));
     }
 
     #[core::prelude::v1::test]

@@ -1459,6 +1459,7 @@ dependencies = [
  "fumi-sidebar",
  "fumi-toolbar",
  "fumi-ui",
+ "fumi-updater",
  "fumi-workspace",
  "gpui-fast",
  "gpui-fast-platform",
@@ -1566,6 +1567,19 @@ dependencies = [
  "raw-window-handle",
  "smallvec",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "fumi-updater"
+version = "0.1.0"
+dependencies = [
+ "cocoa",
+ "fumi-ui",
+ "gpui-fast",
+ "hex",
+ "objc",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]
