@@ -11,6 +11,10 @@ EXEC=${BUNDLE_EXEC:-FumiGPUI}
 A=${BUNDLE_OUT:-$R/target/FumiGPUI.app}
 ASSETS=$R/resources/AppIcon.appiconset
 VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' $R/Cargo.toml | head -1)
+# A real, monotonically increasing build number. Release builds set this from
+# the git commit count; local bundles fall back to it too so CFBundleVersion is
+# never the constant "1" the updater can't compare.
+BUILD_NUMBER=${BUILD_NUMBER:-$(git -C $R rev-list --count HEAD 2>/dev/null || echo 1)}
 
 mkdir -p $A/Contents/MacOS $A/Contents/Resources
 rm -rf $A/Contents/MacOS
@@ -46,7 +50,7 @@ cat > $A/Contents/Info.plist <<P
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundleShortVersionString</key><string>$VERSION</string>
-<key>CFBundleVersion</key><string>1</string>
+<key>CFBundleVersion</key><string>$BUILD_NUMBER</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
 <key>NSHumanReadableCopyright</key><string>Copyright (c) 2025 Dylan Deng</string>

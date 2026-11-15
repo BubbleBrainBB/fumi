@@ -131,6 +131,7 @@ pub mod keys {
     pub const SIDEBAR_WIDTH: &str = "fumi.sidebarWidth";
     pub const LAUNCH_AT_LOGIN: &str = "fumi.launchAtLogin";
     pub const AUTO_UPDATES: &str = "fumi.autoUpdates";
+    pub const AUTO_DOWNLOAD_UPDATES: &str = "fumi.autoDownloadUpdates";
     pub const ACCENT: &str = "fumi.accentColor";
     pub const WORKSPACE: &str = "fumi.workspacePath";
     pub const RECENT_WORKSPACES: &str = "fumi.recentWorkspaces";

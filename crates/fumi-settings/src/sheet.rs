@@ -52,6 +52,8 @@ pub enum SettingsChange {
     Writing,
     /// Publishing tools and their options: redraw an open preview.
     Publish,
+    /// Updater preferences (automatic checks and downloads).
+    Updates,
 }
 
 pub type OnChange = Rc<dyn Fn(SettingsChange, &mut Window, &mut App)>;
@@ -199,6 +201,8 @@ struct Values {
     avatar: String,
     end_card: bool,
     end_line: String,
+    auto_updates: bool,
+    auto_download: bool,
 }
 
 impl Values {
@@ -226,6 +230,8 @@ impl Values {
             avatar: text(keys::XHS_AVATAR, ""),
             end_card: s::get_bool(keys::XHS_END_CARD, false),
             end_line: text(keys::XHS_END_LINE, ""),
+            auto_updates: s::get_bool(keys::AUTO_UPDATES, true),
+            auto_download: s::get_bool(keys::AUTO_DOWNLOAD_UPDATES, false),
         }
     }
 }
@@ -438,6 +444,8 @@ impl SettingsSheet {
             ("sw-xhs", self.v.xhs),
             ("sw-pages", self.v.page_numbers),
             ("sw-end", self.v.end_card),
+            ("sw-auto-updates", self.v.auto_updates),
+            ("sw-auto-download", self.v.auto_download),
         ] {
             if key.starts_with("sw-") {
                 self.switches.snap(key, on);
@@ -907,9 +915,17 @@ impl SettingsSheet {
             }
             cx.notify();
         });
+        let auto_updates = self.bool_switch(
+            "sw-auto-updates", self.v.auto_updates, SettingsChange::Updates, keys::AUTO_UPDATES, now, window, cx,
+        );
+        let auto_download = self.bool_switch(
+            "sw-auto-download", self.v.auto_download, SettingsChange::Updates, keys::AUTO_DOWNLOAD_UPDATES, now, window, cx,
+        );
         group("Library", false, window)
             .child(row(title, detail, controls))
             .child(row("Open at login", login_detail, login))
+            .child(row("Check for updates automatically", None, auto_updates))
+            .child(row("Download updates automatically", None, auto_download))
     }
 
     fn avatar_image(&mut self) -> Option<Arc<RenderImage>> {

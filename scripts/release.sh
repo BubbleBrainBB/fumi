@@ -9,6 +9,11 @@
 #
 # --notarize uses the notarytool profile the Swift release already stored ("fumi").
 # SIGN_IDENTITY and NOTARY_PROFILE override the defaults.
+#
+# The updater reads a static appcast.json. Release notes come from
+# RELEASE_NOTES or RELEASE_NOTES_FILE; the feed and its history are written to
+# target/dist/appcast.json. Publish that file to the project's GitHub Pages site
+# (the URL fumi-updater reads) alongside uploading the DMG on the release.
 set -euo pipefail
 R=${0:A:h:h}
 cd $R
@@ -62,4 +67,38 @@ if [[ $NOTARIZE == 1 ]]; then
   spctl --assess --type open --context context:primary-signature --verbose $DMG
 fi
 
-shasum -a 256 $DMG
+SHA256=$(shasum -a 256 $DMG | awk '{print $1}')
+echo "$SHA256  $DMG"
+
+# Publish what the updater reads. One entry per version, newest first; an
+# existing feed's history is preserved and this version is replaced/inserted.
+BUILD_NUMBER=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" $APP/Contents/Info.plist)
+NOTES="${RELEASE_NOTES:-}"
+if [[ -n "${RELEASE_NOTES_FILE:-}" ]]; then NOTES=$(cat "$RELEASE_NOTES_FILE"); fi
+DMG_NAME=$(basename "$DMG")
+ASSET_URL="https://github.com/BubbleBrainBB/fumi/releases/download/v$VERSION/$DMG_NAME"
+APPCAST=$OUT/appcast.json
+echo "==> Writing $APPCAST"
+python3 - "$APPCAST" "$VERSION" "$BUILD_NUMBER" "$SHA256" "$ASSET_URL" "$NOTES" <<'PY'
+import json, os, sys
+path, version, build, sha, url, notes = sys.argv[1:7]
+try:
+    with open(path) as f:
+        feed = json.load(f)
+except (OSError, ValueError):
+    feed = {"versions": []}
+versions = [v for v in feed.get("versions", []) if v.get("version") != version]
+entry = {
+    "version": version,
+    "build": int(build) if build.isdigit() else 0,
+    "date": __import__("datetime").date.today().isoformat(),
+    "notes": notes,
+    "asset": {"url": url, "sha256": sha.lower()},
+    "min_os": "14.0",
+}
+versions.insert(0, entry)
+with open(path, "w") as f:
+    json.dump({"versions": versions}, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+print("appcast written:", path)
+PY

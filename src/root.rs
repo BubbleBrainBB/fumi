@@ -14,6 +14,7 @@ use fumi_toolbar::{Toolbar, ToolbarEvent};
 use fumi_ui::theme::{self, mix, t};
 use fumi_ui::window_frame::WindowFrame;
 use fumi_ui::{native, settings};
+use fumi_updater::prompt::{CHECK_INTERVAL, PromptEvent, UpdatePrompt};
 use fumi_workspace::{WindowStart, Workspace, WorkspaceEvent};
 use gpui::prelude::*;
 use gpui::*;
@@ -71,6 +72,7 @@ pub struct RootView {
     welcome: Entity<WelcomePage>,
     publish: Entity<PublishPane>,
     caret: Entity<CaretLayer>,
+    update: Entity<UpdatePrompt>,
     backdrop: Option<usize>,
     focus: FocusHandle,
     /// 0 is the plain sheet, 1 the framed page.
@@ -126,11 +128,29 @@ impl RootView {
         });
         publish.update(cx, |p, cx| p.watch(&pages, cx));
 
+        // The update dialog. Installing needs unsaved tabs flushed first, then
+        // a quit; the staged shell script relaunches Fumi with the new version.
+        let root_entity = cx.entity().downgrade();
+        let update = cx.new(|cx| {
+            UpdatePrompt::new(
+                std::rc::Rc::new(move |event: PromptEvent, cx: &mut App| match event {
+                    PromptEvent::RequestQuit => {
+                        let _ = root_entity.update(cx, |root, cx| {
+                            root.workspace.read(cx).save_tabs();
+                        });
+                        cx.quit();
+                    }
+                }),
+                cx,
+            )
+        });
+
         let subs = vec![
             cx.observe(&publish, |_, _, cx| cx.notify()),
             cx.observe(&workspace, |_, _, cx| cx.notify()),
             cx.observe(&pages, |_, _, cx| cx.notify()),
             cx.observe(&sidebar, |_, _, cx| cx.notify()),
+            cx.observe(&update, |_, _, cx| cx.notify()),
             cx.subscribe(&workspace, |_, _, _: &WorkspaceEvent, cx| cx.notify()),
             cx.subscribe(&sidebar, |_, _, e: &SidebarEvent, cx| {
                 let SidebarEvent::OpenWindow { library } = e;
@@ -169,6 +189,7 @@ impl RootView {
             welcome,
             publish,
             caret,
+            update,
             backdrop: None,
             focus,
             frame: 1.,
@@ -177,7 +198,32 @@ impl RootView {
             _subs: subs,
         };
         this.apply_theme(window, cx);
+        this.start_update_checks(cx);
         this
+    }
+
+    /// A quiet check a few seconds after launch, then every six hours while
+    /// the app is running — but only when automatic checks are on. Manual
+    /// checks come from the Fumi menu regardless.
+    fn start_update_checks(&mut self, cx: &mut Context<Self>) {
+        if !fumi_updater::update::auto_check() {
+            return;
+        }
+        let weak = self.update.downgrade();
+        cx.spawn(async move |_, cx: &mut AsyncApp| {
+            cx.background_executor().timer(Duration::from_secs(8)).await;
+            loop {
+                let alive = weak.update(cx, |prompt, cx| prompt.request_check(cx));
+                if alive.is_err() {
+                    break;
+                }
+                cx.background_executor().timer(CHECK_INTERVAL).await;
+                if !fumi_updater::update::auto_check() {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     fn settings_changed(&mut self, change: SettingsChange, _window: &mut Window, cx: &mut Context<Self>) {
@@ -204,6 +250,8 @@ impl RootView {
                     }
                 }
             }),
+            // The updater reads its preferences when a check runs; no redraw.
+            SettingsChange::Updates => {}
         }
     }
 
@@ -346,6 +394,12 @@ impl Render for RootView {
             .font(fumi_editor::display::ui_font())
             .text_size(px(theme::text_size::BODY));
         let root = fumi_toolbar::register_actions(root, &self.toolbar, cx);
+        let root = {
+            let updater = self.update.clone();
+            root.on_action(move |_: &fumi_toolbar::actions::CheckForUpdates, _, cx| {
+                updater.update(cx, |prompt, cx| prompt.request_check(cx));
+            })
+        };
         let root = fumi_sidebar::wire_actions(&self.sidebar, root);
         let root = {
             let (toggle, libraries) = (self.sidebar.clone(), self.sidebar.clone());
@@ -400,7 +454,8 @@ impl Render for RootView {
                 .child(div().size_full().flex().child(sidebar).child(detail))
             .child(self.caret.clone())
                 .child(overlay(self.search.clone()))
-                .child(overlay(self.sheet.clone())),
+                .child(overlay(self.sheet.clone()))
+                .child(overlay(self.update.clone())),
         )
     }
 }
